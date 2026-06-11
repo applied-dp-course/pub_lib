@@ -15,9 +15,6 @@ pip install "libdpy @ git+https://github.com/applied-dp-course/pub_lib.git"
 ```bash
 # Machine learning features (TensorFlow, dp-accounting)
 pip install "libdpy[ml] @ git+https://github.com/applied-dp-course/pub_lib.git"
-
-# Development tools (includes [ml])
-pip install "libdpy[dev] @ git+https://github.com/applied-dp-course/pub_lib.git"
 ```
 
 Requires Python 3.10.11 or newer.

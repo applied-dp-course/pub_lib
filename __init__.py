@@ -9,13 +9,3 @@ Subpackages:
 """
 
 __version__ = "0.1.0"
-
-import sys
-import os
-
-# Try to include the class_assignment_solutions
-SOLUTIONS_PATH = 'class_assignment_solutions'
-if SOLUTIONS_PATH in os.listdir():
-    sys.path.append(os.path.abspath('.'))
-if SOLUTIONS_PATH in os.listdir('..'):
-    sys.path.append(os.path.abspath('..'))
