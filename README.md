@@ -46,7 +46,3 @@ To work on the full course project (notebooks, tests, assignments), clone `code_
 ## License
 
 Educational use as part of the Applied Privacy course.
-
-test - A
-
-test - B
