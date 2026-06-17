@@ -4,7 +4,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.stats import beta
 
-from libdpy.assignment_specific.dp_as_hypothesis_testing.utils import (
+from libdpy.hypothesis_testing import (
     FPR_from_threshold,
     TPR_from_threshold,
     threshold_from_FPR,

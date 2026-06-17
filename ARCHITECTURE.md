@@ -8,6 +8,12 @@ no `__init__.py` files — setuptools `find-packages` handles discovery. Course
 datasets ship inside the package under `resources/*.csv` (declared as
 `package-data` in `pyproject.toml`).
 
+## Top-level modules
+
+| File | Provides |
+|------|----------|
+| `hypothesis_testing.py` | Shared threshold, FPR/TPR, and decision-rule helpers for binary hypothesis-testing lectures and ROC visualizations |
+
 ## `privacy_mechanisms/` — core DP mechanisms
 
 | File | Provides |
@@ -74,7 +80,7 @@ only in the assignment notebooks).
 
 | Subfolder | Supports |
 |-----------|----------|
-| `dp_as_hypothesis_testing/` | week 3 lecture/class shared threshold and ROC helper functions |
+| `dp_as_hypothesis_testing/` | compatibility re-exports for old imports; canonical helpers live in `libdpy.hypothesis_testing` |
 | `exponential_mechanism/` | week 7 class + lecture |
 | `smarter_noise_addition/` | week 5 class |
 | `beyond_noise_addition/` | week 6 class (above threshold) |

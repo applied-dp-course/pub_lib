@@ -1,6 +1,10 @@
-"""Utilities for the DP-as-hypothesis-testing lecture and class exercise."""
+"""Compatibility imports for hypothesis-testing helpers.
 
-from libdpy.assignment_specific.dp_as_hypothesis_testing.utils import (
+The canonical location is ``libdpy.hypothesis_testing``. This package is kept so
+older notebooks that imported from ``assignment_specific`` continue to run.
+"""
+
+from libdpy.hypothesis_testing import (
     FPR_from_threshold,
     TPR_from_threshold,
     decision_rule_params,
