@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libdpy"
-version = "0.1.0"
+version = "0.1.1"
 description = "A comprehensive library for Differential Privacy and Privacy-Preserving Machine Learning"
 readme = "README.md"
 requires-python = ">=3.10.11"
@@ -53,6 +53,7 @@ packages = [
     "libdpy",
     "libdpy.visualization",
     "libdpy.assignment_specific",
+    "libdpy.assignment_specific.dp_as_hypothesis_testing",
     "libdpy.privacy_mechanisms",
     "libdpy.ml",
     "libdpy.k_anon",
@@ -60,6 +61,7 @@ packages = [
     "libdpy.assignment_specific.smarter_noise_addition",
     "libdpy.assignment_specific.beyond_noise_addition",
     "libdpy.assignment_specific.k_anon",
+    "libdpy.assignment_specific.privacy_auditing",
     "libdpy.assignment_specific.reconstruction",
     "libdpy.ml.requires_tensorflow",
     "libdpy.attacks.membership_inference",

@@ -74,13 +74,14 @@ only in the assignment notebooks).
 
 | Subfolder | Supports |
 |-----------|----------|
+| `dp_as_hypothesis_testing/` | week 3 lecture/class shared threshold and ROC helper functions |
 | `exponential_mechanism/` | week 7 class + lecture |
 | `smarter_noise_addition/` | week 5 class |
 | `beyond_noise_addition/` | week 6 class (above threshold) |
 | `dp_sgd/` | week 10 class (`default_noise` identity = intentional "no noise" baseline) |
 | `early_stopping/` | week 11 class (includes `secretly_test_sensitivity` hash-check autograder) |
 | `ml_and_overfitting/` | week 11 lecture |
-| `privacy_auditing/` | week 4 class |
+| `privacy_auditing/` | week 4 class helpers (`legacy_algorithm`, histogram plots, and compatibility re-exports for threshold helpers) |
 | `reconstruction/` | week 2 class (`mysterious_predictor`/`reconstructor` are implemented, intentionally opaque); `reconstruction_lecture_visualization.py` (matplotlib: query matrix, 2D slab widget, candidate elimination) and `reconstruction_3d_visualization.py` (Plotly: 3D slab explorer, OLS out-of-cube) for the reconstruction lecture |
 | `k_anon/` | week 1 class |
 

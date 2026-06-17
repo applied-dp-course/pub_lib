@@ -2,7 +2,13 @@ from typing import Callable
 
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.stats import beta, rv_continuous as Distribution
+from scipy.stats import beta
+
+from libdpy.assignment_specific.dp_as_hypothesis_testing.utils import (
+    FPR_from_threshold,
+    TPR_from_threshold,
+    threshold_from_FPR,
+)
 
 
 def clopper_pearson_lower(successes: int, trials: int, alpha: float) -> float:
@@ -57,28 +63,3 @@ def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: i
     plt.show()
 
     return
-
-
-def FPR_from_threshold(dist_neg: Distribution, threshold: float) -> np.float64:
-    """
-    Calculate the False Positive Rate (FPR) given the negative distribution and a threshold, such that
-    any value greater than it is considered positive.
-    """
-    return 1 - dist_neg.cdf(threshold)
-
-
-def TPR_from_threshold(dist_pos: Distribution, threshold: float) -> np.float64:
-    """
-    Calculate the True Positive Rate (TPR) given the positive distribution and a threshold,
-    such that any value greater than it is considered positive.
-    """
-    return 1 - dist_pos.cdf(threshold)
-
-
-def threshold_from_FPR(dist_neg: Distribution, FPR: float) -> np.float64:
-    """
-    Calculate the threshold such that any value greater than it is considered positive,
-    given the negative distribution and a False Positive Rate (FPR).
-    This function assumes that the other distribution has the same type and variance, and a larger mean.
-    """
-    return dist_neg.ppf(1 - FPR)
