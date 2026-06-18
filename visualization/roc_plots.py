@@ -253,10 +253,13 @@ def ROC_and_distributions_visualization(
     # Update layout
     fig.update_layout(
         height=500,
-        width=1000,
+        autosize=True,
+        # Reserve top margin so the title sits above the subplots instead of
+        # overlapping them when the figure is scaled to fit a slide.
+        margin=dict(t=90, b=40, l=60, r=30),
         title=dict(
             text="Two distributions and their ROC curve",
-            y=0.95,
+            y=0.97,
             x=0.5,
             xanchor='center',
             yanchor='top',

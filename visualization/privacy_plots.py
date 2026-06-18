@@ -1,23 +1,44 @@
 """Privacy-specific visualization utilities."""
 
-from typing import Tuple
-import numpy as np
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections.abc import Sequence
+from functools import partial
+from statistics import NormalDist
 
 import plotly.graph_objects as go
-from ipywidgets import FloatSlider, VBox, HBox
 
-import matplotlib.pyplot as plt
+from .interactive import ControlSpec, InteractiveSpec, iframe_embed
 
 
-def calc_privacy_bound(log_slope: float, shift: float, res) -> Tuple[np.ndarray, np.ndarray]:
-    slope = np.exp(log_slope)
-    x_1 = np.linspace(0, (1 - shift) / (1 + slope), np.floor(res / 2).astype(int))
-    y_1 = slope * x_1 + shift
-    x_2 = np.linspace((1 - shift) / (1 + slope), 1 - shift, np.ceil(res / 2).astype(int))
-    y_2 = 1 / slope * x_2 + 1 - (1 - shift) / slope
-    x = np.concatenate([x_1, x_2])
-    y = np.concatenate([y_1, y_2])
-    return x, y
+def _linspace(start: float, stop: float, count: int) -> list[float]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return [float(start)]
+    step = (stop - start) / (count - 1)
+    return [start + index * step for index in range(count)]
+
+
+def calc_privacy_bound(
+    log_slope: float, shift: float, res: int = 100
+) -> tuple[list[float], list[float]]:
+    """Return the piecewise-linear privacy bound for concrete parameters."""
+
+    if res < 2:
+        raise ValueError("res must be at least 2")
+    if not 0 <= shift <= 1:
+        raise ValueError("shift must be between 0 and 1")
+    slope = math.exp(log_slope)
+    midpoint = (1 - shift) / (1 + slope)
+    x_1 = _linspace(0, midpoint, res // 2)
+    y_1 = [slope * value + shift for value in x_1]
+    x_2 = _linspace(midpoint, 1 - shift, res - res // 2)
+    y_2 = [value / slope + 1 - (1 - shift) / slope for value in x_2]
+    return x_1 + x_2, y_1 + y_2
 
 
 def create_distribution(dist_type, mean, std):
@@ -27,7 +48,9 @@ def create_distribution(dist_type, mean, std):
 def draw_ROCs_and_diag_from_distributions(
     distributions, fig, show_diagonal=True, diagonal_offset=0, res=100
 ):
-    colors = ['red', 'green', 'orange', 'purple', 'brown']
+    import numpy as np
+
+    colors = ["red", "green", "orange", "purple", "brown"]
 
     for i, (dist0, dist1) in enumerate(distributions):
         # Calculate ROC curve points
@@ -38,7 +61,11 @@ def draw_ROCs_and_diag_from_distributions(
         color = colors[i % len(colors)]
         fig.add_trace(
             go.Scatter(
-                x=fpr, y=tpr, mode='lines', name=f'ROC {i+1}', line=dict(color=color, width=2)
+                x=fpr,
+                y=tpr,
+                mode="lines",
+                name=f"ROC {i+1}",
+                line=dict(color=color, width=2),
             )
         )
 
@@ -50,114 +77,353 @@ def draw_ROCs_and_diag_from_distributions(
             go.Scatter(
                 x=diagonal_x,
                 y=diagonal_y,
-                mode='lines',
-                name='Diagonal',
-                line=dict(color='gray', width=1, dash='dash'),
+                mode="lines",
+                name="Diagonal",
+                line=dict(color="gray", width=1, dash="dash"),
             )
         )
 
 
-# Used by lecture_3
-class PrivacyPlot:
-    def __init__(self, distribution_types: list, sensitivity: float, std: float, res: int = 100):
+def _distribution_name(distribution_type) -> str:
+    if isinstance(distribution_type, str):
+        name = distribution_type
+    else:
+        name = getattr(distribution_type, "name", None)
+    if name is None:
+        name = getattr(distribution_type, "__name__", "")
+        if name.endswith("_gen"):
+            name = name[:-4]
+    if name not in {"norm", "laplace", "uniform"}:
+        raise ValueError(f"unsupported scipy distribution type: {distribution_type!r}")
+    return name
 
-        # Initialize parameters
-        self.log_slope = np.log(1.5)
-        self.shift = 0.0
-        self.res = res
-        self.fig = go.FigureWidget()
 
-        # Add privacy bound
-        x, y = calc_privacy_bound(self.log_slope, self.shift, res)
-        self.fig.add_trace(
+def _distribution_ppf(name: str, probability: float, mean: float, std: float) -> float:
+    if name == "norm":
+        return NormalDist(mean, std).inv_cdf(probability)
+    if name == "laplace":
+        if probability < 0.5:
+            return mean + std * math.log(2 * probability)
+        return mean - std * math.log(2 * (1 - probability))
+    if name == "uniform":
+        return mean + probability * std
+    raise ValueError(f"unknown distribution: {name!r}")
+
+
+def _distribution_cdf(name: str, value: float, mean: float, std: float) -> float:
+    if name == "norm":
+        return NormalDist(mean, std).cdf(value)
+    if name == "laplace":
+        if value < mean:
+            return 0.5 * math.exp((value - mean) / std)
+        return 1 - 0.5 * math.exp(-(value - mean) / std)
+    if name == "uniform":
+        return min(1.0, max(0.0, (value - mean) / std))
+    raise ValueError(f"unknown distribution: {name!r}")
+
+
+def _named_distribution_roc(
+    name: str, sensitivity: float, std: float, res: int
+) -> tuple[list[float], list[float]]:
+    lower = _distribution_ppf(name, 0.001, 0, std)
+    upper = _distribution_ppf(name, 0.999, 0, std)
+    thresholds = _linspace(lower, upper, res)
+    fpr = [1 - _distribution_cdf(name, threshold, 0, std) for threshold in thresholds]
+    tpr = [
+        1 - _distribution_cdf(name, threshold, sensitivity, std)
+        for threshold in thresholds
+    ]
+    return fpr, tpr
+
+
+def make_privacy_bound_figure(
+    log_slope: float,
+    shift: float,
+    *,
+    distribution_names: Sequence[str] = ("norm",),
+    sensitivity: float = 1.0,
+    std: float = 1.5,
+    res: int = 100,
+) -> go.Figure:
+    """Build one Plotly figure for one concrete privacy-plot state."""
+
+    if sensitivity == 0:
+        raise ValueError("sensitivity must be nonzero")
+    if std <= 0:
+        raise ValueError("std must be positive")
+
+    figure = go.Figure()
+    x, y = calc_privacy_bound(log_slope, shift, res)
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode="lines",
+            name="Privacy bound",
+            line=dict(color="blue", width=4),
+        )
+    )
+
+    colors = ["red", "green", "orange", "purple", "brown"]
+    for index, name in enumerate(distribution_names):
+        fpr, tpr = _named_distribution_roc(name, sensitivity, std, res)
+        figure.add_trace(
             go.Scatter(
-                x=x, y=y, mode='lines', name='Privacy bound', line=dict(color='blue', width=4)
+                x=fpr,
+                y=tpr,
+                mode="lines",
+                name=f"ROC {index + 1}",
+                line=dict(color=colors[index % len(colors)], width=2),
             )
         )
 
-        # Add ROC curves of the distributions
-        distributions = []
-        for dist_type in distribution_types:
-            dist0 = create_distribution(dist_type, 0, std)
-            dist1 = create_distribution(dist_type, sensitivity, std)
-            distributions.append([dist0, dist1])
-        draw_ROCs_and_diag_from_distributions(distributions, self.fig, False, 0, res)
+    figure.update_layout(
+        title={
+            "text": f"ROC for distributions with std / sensitivity = {std/sensitivity:.2f}",
+            "y": 0.95,
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top",
+        },
+        xaxis_title="False Positive Rate",
+        yaxis_title="True Positive Rate",
+        autosize=True,
+        height=600,
+        margin={"t": 80, "b": 60, "l": 65, "r": 30},
+    )
+    return figure
 
-        # Create sliders for log_slope and shift at the bottom of the plot
-        self.log_slope_slider = FloatSlider(
-            value=self.log_slope, min=0, max=np.log(30), step=0.05, description='log(Slope)'
+
+def _privacy_plot_artifact_name(
+    distribution_names: Sequence[str], sensitivity: float, std: float, res: int
+) -> str:
+    configuration = {
+        "distribution_names": list(distribution_names),
+        "sensitivity": sensitivity,
+        "std": std,
+        "res": res,
+    }
+    digest = hashlib.sha256(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:10]
+    distribution_slug = "-".join(distribution_names)
+    return f"privacy-plot-{distribution_slug}-{digest}"
+
+
+def privacy_plot_spec(
+    distribution_types: Sequence = ("norm",),
+    sensitivity: float = 1.0,
+    std: float = 1.5,
+    res: int = 100,
+) -> InteractiveSpec:
+    """Return the backend-neutral specification for ``PrivacyPlot``."""
+
+    distribution_names = tuple(_distribution_name(item) for item in distribution_types)
+    fixed_kwargs = {
+        "distribution_names": distribution_names,
+        "sensitivity": sensitivity,
+        "std": std,
+        "res": res,
+    }
+    return InteractiveSpec(
+        name="privacy_plot",
+        artifact_name=_privacy_plot_artifact_name(
+            distribution_names=distribution_names,
+            sensitivity=sensitivity,
+            std=std,
+            res=res,
+        ),
+        controls=(
+            ControlSpec(
+                name="log_slope",
+                kind="slider",
+                label="log(slope)",
+                default=0.0,
+                min=0.0,
+                max=math.log(30),
+                step=0.01,
+                continuous=True,
+            ),
+            ControlSpec(
+                name="shift",
+                kind="slider",
+                label="shift",
+                default=0.0,
+                min=0.0,
+                max=1.0,
+                step=0.01,
+                continuous=True,
+            ),
+        ),
+        preferred_backend="wasm-marimo",
+        # Only advertise backends that have a working renderer. JupyterLite
+        # (interactive.py's third Backend literal) is intentionally not listed:
+        # no render_jupyterlite adapter exists yet, so claiming it here would
+        # let the build pick a backend it cannot actually produce.
+        allowed_backends=("wasm-marimo",),
+        make_figure=partial(make_privacy_bound_figure, **fixed_kwargs),
+        figure_factory=("libdpy.visualization.privacy_plots:make_privacy_bound_figure"),
+        fixed_kwargs=fixed_kwargs,
+        description="Privacy bound explorer with two continuous controls.",
+    )
+
+
+def privacy_plot_ipywidgets(
+    distribution_types: Sequence = ("norm",),
+    sensitivity: float = 1.0,
+    std: float = 1.5,
+    res: int = 100,
+):
+    """Return the legacy notebook adapter around the pure figure factory."""
+
+    from ipywidgets import FloatSlider, HBox, VBox
+
+    distribution_names = tuple(_distribution_name(item) for item in distribution_types)
+    log_slope_slider = FloatSlider(
+        value=0.0,
+        min=0.0,
+        max=math.log(30),
+        step=0.01,
+        description="log(slope)",
+        continuous_update=False,
+    )
+    shift_slider = FloatSlider(
+        value=0.0,
+        min=0.0,
+        max=1.0,
+        step=0.01,
+        description="shift",
+        continuous_update=False,
+    )
+    figure = go.FigureWidget(
+        make_privacy_bound_figure(
+            log_slope=log_slope_slider.value,
+            shift=shift_slider.value,
+            distribution_names=distribution_names,
+            sensitivity=sensitivity,
+            std=std,
+            res=res,
         )
-        self.shift_slider = FloatSlider(
-            value=self.shift, min=0, max=1, step=0.01, description='Shift'
+    )
+
+    def update_plot(_change=None):
+        updated = make_privacy_bound_figure(
+            log_slope=log_slope_slider.value,
+            shift=shift_slider.value,
+            distribution_names=distribution_names,
+            sensitivity=sensitivity,
+            std=std,
+            res=res,
         )
+        with figure.batch_update():
+            figure.data[0].x = updated.data[0].x
+            figure.data[0].y = updated.data[0].y
 
-        # Set up callbacks
-        self.log_slope_slider.observe(self.update_plot, names='value')
-        self.shift_slider.observe(self.update_plot, names='value')
+    log_slope_slider.observe(update_plot, names="value")
+    shift_slider.observe(update_plot, names="value")
+    return VBox([figure, HBox([log_slope_slider, shift_slider])])
 
-        # Create figure
-        self.fig.update_layout(
-            title={
-                'text': f"ROC for distributions with std / sensitivity = {std/sensitivity :.2f}",
-                'y': 0.95,
-                'x': 0.5,
-                'xanchor': 'center',
-                'yanchor': 'top',
-            },
-            xaxis_title='False Positive Rate',
-            yaxis_title='True Positive Rate',
-            width=800,
-            height=600,
+
+class PrivacyPlot:
+    """Privacy-bound explorer with notebook and static-site adapters."""
+
+    def __init__(
+        self,
+        distribution_types: Sequence,
+        sensitivity: float,
+        std: float,
+        res: int = 100,
+    ):
+        self.distribution_types = tuple(distribution_types)
+        self.sensitivity = sensitivity
+        self.std = std
+        self.res = res
+
+    def spec(self) -> InteractiveSpec:
+        return privacy_plot_spec(
+            distribution_types=self.distribution_types,
+            sensitivity=self.sensitivity,
+            std=self.std,
+            res=self.res,
         )
-
-        # Create the widget display
-        self.widget = VBox([self.fig, HBox([self.log_slope_slider, self.shift_slider])])
-
-    def update_plot(self, change):
-        self.log_slope = self.log_slope_slider.value
-        self.shift = self.shift_slider.value
-
-        # Update the privacy bound trace
-        x, y = calc_privacy_bound(self.log_slope, self.shift, self.res)
-        with self.fig.batch_update():
-            self.fig.data[0].x = x
-            self.fig.data[0].y = y
 
     def show(self):
-        return self.widget
+        """Return the ipywidgets adapter for live-kernel notebooks."""
+
+        return privacy_plot_ipywidgets(
+            distribution_types=self.distribution_types,
+            sensitivity=self.sensitivity,
+            std=self.std,
+            res=self.res,
+        )
+
+    def embed(
+        self,
+        *,
+        height: int | None = None,
+        mode: str = "page",
+        src: str | None = None,
+    ):
+        """Return a lazy iframe for the generated marimo WASM artifact."""
+
+        if mode not in {"page", "deck"}:
+            raise ValueError("mode must be 'page' or 'deck'")
+        resolved_height = (
+            height if height is not None else (620 if mode == "deck" else 750)
+        )
+        return iframe_embed(self.spec(), src=src, height=resolved_height)
 
 
 def plot_epsilon_delta_tradeoff(
     epsilons, deltas, mechanism_names=None, title="Privacy Budget Trade-off"
 ):
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=(10, 6))
 
     if mechanism_names is None:
-        mechanism_names = [f'Mechanism {i+1}' for i in range(len(epsilons))]
+        mechanism_names = [f"Mechanism {i+1}" for i in range(len(epsilons))]
 
-    for i, (eps_list, delta_list, name) in enumerate(zip(epsilons, deltas, mechanism_names)):
-        plt.plot(eps_list, delta_list, 'o-', label=name, linewidth=2, markersize=6)
+    for i, (eps_list, delta_list, name) in enumerate(
+        zip(epsilons, deltas, mechanism_names)
+    ):
+        plt.plot(eps_list, delta_list, "o-", label=name, linewidth=2, markersize=6)
 
-    plt.xlabel('Privacy Budget (ε)')
-    plt.ylabel('Failure Probability (δ)')
+    plt.xlabel("Privacy Budget (ε)")
+    plt.ylabel("Failure Probability (δ)")
     plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    plt.xscale('log')
+    plt.yscale("log")
+    plt.xscale("log")
     plt.show()
 
 
-def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss Distribution"):
+def plot_privacy_loss_distribution(
+    privacy_losses, epsilon, title="Privacy Loss Distribution"
+):
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=(10, 6))
-    plt.hist(privacy_losses, bins=50, density=True, alpha=0.7, color='lightblue', edgecolor='black')
+    plt.hist(
+        privacy_losses,
+        bins=50,
+        density=True,
+        alpha=0.7,
+        color="lightblue",
+        edgecolor="black",
+    )
 
     # Add vertical line at epsilon
-    plt.axvline(epsilon, color='red', linestyle='--', linewidth=2, label=f'ε = {epsilon}')
-    plt.axvline(-epsilon, color='red', linestyle='--', linewidth=2, label=f'-ε = {-epsilon}')
+    plt.axvline(
+        epsilon, color="red", linestyle="--", linewidth=2, label=f"ε = {epsilon}"
+    )
+    plt.axvline(
+        -epsilon, color="red", linestyle="--", linewidth=2, label=f"-ε = {-epsilon}"
+    )
 
-    plt.xlabel('Privacy Loss')
-    plt.ylabel('Density')
+    plt.xlabel("Privacy Loss")
+    plt.ylabel("Density")
     plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -165,20 +431,23 @@ def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss 
 
 
 def plot_roc_curves(fpr_list, tpr_list, labels=None, title="ROC Curves Comparison"):
+    import matplotlib.pyplot as plt
+    import numpy as np
+
     plt.figure(figsize=(8, 8))
 
     if labels is None:
-        labels = [f'Model {i+1}' for i in range(len(fpr_list))]
+        labels = [f"Model {i+1}" for i in range(len(fpr_list))]
 
     for fpr, tpr, label in zip(fpr_list, tpr_list, labels):
         auc = np.trapz(tpr, fpr)
-        plt.plot(fpr, tpr, linewidth=2, label=f'{label} (AUC = {auc:.3f})')
+        plt.plot(fpr, tpr, linewidth=2, label=f"{label} (AUC = {auc:.3f})")
 
     # Add diagonal line
-    plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random Classifier')
+    plt.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Random Classifier")
 
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
     plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -188,21 +457,29 @@ def plot_roc_curves(fpr_list, tpr_list, labels=None, title="ROC Curves Compariso
 
 
 def plot_privacy_accounting(epsilons, steps, title="Privacy Budget Consumption"):
+    import matplotlib.pyplot as plt
+
     plt.figure(figsize=(10, 6))
-    plt.plot(steps, epsilons, 'b-', linewidth=2, marker='o', markersize=4)
-    plt.xlabel('Training Steps')
-    plt.ylabel('Cumulative Privacy Budget (ε)')
+    plt.plot(steps, epsilons, "b-", linewidth=2, marker="o", markersize=4)
+    plt.xlabel("Training Steps")
+    plt.ylabel("Cumulative Privacy Budget (ε)")
     plt.title(title)
     plt.grid(True, alpha=0.3)
 
     # Add horizontal lines for common privacy budgets
     privacy_levels = [0.1, 1.0, 10.0]
-    colors = ['green', 'orange', 'red']
-    labels = ['Strong Privacy', 'Moderate Privacy', 'Weak Privacy']
+    colors = ["green", "orange", "red"]
+    labels = ["Strong Privacy", "Moderate Privacy", "Weak Privacy"]
 
     for level, color, label in zip(privacy_levels, colors, labels):
         if level <= max(epsilons):
-            plt.axhline(level, color=color, linestyle='--', alpha=0.7, label=f'{label} (ε={level})')
+            plt.axhline(
+                level,
+                color=color,
+                linestyle="--",
+                alpha=0.7,
+                label=f"{label} (ε={level})",
+            )
 
     plt.legend()
     plt.show()
