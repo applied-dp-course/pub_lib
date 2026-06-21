@@ -54,6 +54,8 @@ packages = [
     "libdpy.visualization",
     "libdpy.assignment_specific",
     "libdpy.assignment_specific.dp_as_hypothesis_testing",
+    "libdpy.assignment_specific.exponential_mechanism",
+    "libdpy.assignment_specific.ml_and_overfitting",
     "libdpy.privacy_mechanisms",
     "libdpy.ml",
     "libdpy.k_anon",

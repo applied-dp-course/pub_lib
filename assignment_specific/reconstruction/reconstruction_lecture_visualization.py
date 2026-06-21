@@ -12,15 +12,13 @@ from matplotlib.patches import FancyArrowPatch
 from libdpy.attacks.reconstruction.instances import (
     corner_feasible,
 )
+from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive_matplotlib import render_matplotlib_ipywidgets
 
 try:
     from ipywidgets import (
-        Checkbox,
-        Dropdown,
-        FloatSlider,
-        HBox,
         HTML,
-        Image as WidgetImage,
+        HBox,
         Layout,
         VBox,
     )
@@ -125,9 +123,7 @@ def _line_segment_2d(
             if lo - 1e-9 <= y <= hi + 1e-9:
                 points.append(np.array([x, y], dtype=float))
         elif abs(q_arr[0] * x - c) < 1e-9:
-            points.extend(
-                [np.array([x, lo], dtype=float), np.array([x, hi], dtype=float)]
-            )
+            points.extend([np.array([x, lo], dtype=float), np.array([x, hi], dtype=float)])
 
     for y in (lo, hi):
         if abs(q_arr[0]) > 1e-12:
@@ -135,9 +131,7 @@ def _line_segment_2d(
             if lo - 1e-9 <= x <= hi + 1e-9:
                 points.append(np.array([x, y], dtype=float))
         elif abs(q_arr[1] * y - c) < 1e-9:
-            points.extend(
-                [np.array([lo, y], dtype=float), np.array([hi, y], dtype=float)]
-            )
+            points.extend([np.array([lo, y], dtype=float), np.array([hi, y], dtype=float)])
 
     uniq: list[np.ndarray] = []
     for pt in points:
@@ -312,9 +306,7 @@ def draw_2d_slabs(
     ax.set_xlabel(r"$x_1$")
     ax.set_ylabel(r"$x_2$")
     n_queries = len(queries)
-    ax.set_title(
-        f"{n_queries} query slab{'s' if n_queries != 1 else ''}, alpha={alpha:.2f}"
-    )
+    ax.set_title(f"{n_queries} query slab{'s' if n_queries != 1 else ''}, alpha={alpha:.2f}")
     ax.set_aspect("equal")
     if show_legend:
         legend_handles = [
@@ -371,45 +363,126 @@ def draw_2d_slabs(
         )
 
 
-def interactive_2d_slab() -> None:
-    """
-    Launch an interactive 2D slab widget (revised lecture V1).
-
-    Controls on the left; the slab picture on the right. Query slabs are
-    drawn only after ``true b`` is selected, since the released answers are
-    undefined before then.
-    """
-    if not HAS_WIDGETS:
-        print("ipywidgets is not installed; 2D slab widget unavailable.")
-        return
-
-    import io
-
-    import matplotlib
-    from IPython.display import display
+def make_2d_slab_figure(
+    true_b: str,
+    alpha: float,
+    query_0: bool = False,
+    query_1: bool = False,
+    query_2: bool = False,
+) -> plt.Figure:
+    """Build one 2D slab state without creating widgets or changing backends."""
 
     from libdpy.attacks.reconstruction.instances import compute_2d_slab_region
-
-    matplotlib.use("Agg")
-    matplotlib.pyplot.ioff()
 
     query_specs: list[tuple[str, list[float]]] = [
         ("q = (1, 1)", [1, 1]),
         ("q = (1, 0)", [1, 0]),
         ("q = (0, 1)", [0, 1]),
     ]
-
-    checkboxes: dict[str, Checkbox] = {}
-    query_rows: list[Any] = []
-    for spec_idx, (label, _q) in enumerate(query_specs):
-        color = _QUERY_COLORS[spec_idx % len(_QUERY_COLORS)]
-        cb = Checkbox(
-            value=False,
-            description=label,
-            indent=False,
-            layout=Layout(width="auto"),
+    if true_b and true_b not in _BINARY_CORNERS:
+        raise ValueError(f"unknown binary corner: {true_b!r}")
+    b = np.array(_BINARY_CORNERS[true_b], dtype=float) if true_b else None
+    active = [
+        (label, q, index)
+        for index, ((label, q), enabled) in enumerate(zip(query_specs, (query_0, query_1, query_2)))
+        if enabled
+    ]
+    figure, axis = plt.subplots(figsize=(4.0, 3.4))
+    if b is None or not active:
+        axis.set_xlim(-0.16, 1.16)
+        axis.set_ylim(-0.16, 1.16)
+        axis.set_xticks([0, 1])
+        axis.set_yticks([0, 1])
+        axis.axvline(0.5, linestyle=":", linewidth=1, color="gray")
+        axis.axhline(0.5, linestyle=":", linewidth=1, color="gray")
+        for cx in (0, 1):
+            for cy in (0, 1):
+                axis.plot(
+                    cx,
+                    cy,
+                    "o",
+                    markersize=8,
+                    fillstyle="none",
+                    color="black",
+                    alpha=0.35,
+                    zorder=5,
+                )
+        if b is not None:
+            axis.scatter(
+                [float(b[0])],
+                [float(b[1])],
+                marker="x",
+                s=90,
+                c=_TRUE_B_COLOR,
+                linewidths=2.2,
+                zorder=7,
+            )
+        axis.set_xlabel(r"$x_1$")
+        axis.set_ylabel(r"$x_2$")
+        axis.set_title(
+            "Choose true b before drawing query slabs" if b is None else "Select at least one query"
         )
-        checkboxes[label] = cb
+        axis.set_aspect("equal")
+        return figure
+
+    _labels, queries, color_indices = zip(*active)
+    queries_list = list(queries)
+    responses = [float(np.dot(q, b)) for q in queries_list]
+    slab_region = compute_2d_slab_region(queries_list, b, alpha)
+    draw_2d_slabs(
+        axis,
+        slab_region,
+        queries_list,
+        b,
+        alpha,
+        query_color_indices=list(color_indices),
+        responses=responses,
+        show_true_b=True,
+        show_legend=False,
+    )
+    return figure
+
+
+def reconstruction_2d_slab_spec() -> InteractiveSpec:
+    return InteractiveSpec(
+        name="reconstruction_2d_slab",
+        artifact_name="reconstruction-2d-slab",
+        controls=(
+            ControlSpec(
+                name="true_b",
+                kind="select",
+                label="true b",
+                default="",
+                values=("", *_BINARY_CORNERS.keys()),
+            ),
+            ControlSpec("query_0", "checkbox", "q = (1, 1)", False),
+            ControlSpec("query_1", "checkbox", "q = (1, 0)", False),
+            ControlSpec("query_2", "checkbox", "q = (0, 1)", False),
+            ControlSpec(
+                name="alpha",
+                kind="slider",
+                label="alpha",
+                default=0.3,
+                min=0.0,
+                max=1.0,
+                step=0.05,
+                readout_format=".2f",
+            ),
+        ),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets",),
+        make_figure=make_2d_slab_figure,
+        figure_factory=(
+            "libdpy.assignment_specific.reconstruction."
+            "reconstruction_lecture_visualization:make_2d_slab_figure"
+        ),
+    )
+
+
+def _slab_2d_widget_layout(image, controls, errors):
+    query_rows: list[Any] = []
+    for index in range(3):
+        color = _QUERY_COLORS[index % len(_QUERY_COLORS)]
         swatch = HTML(
             value=(
                 f'<div style="width:14px;height:14px;background:{color};'
@@ -417,29 +490,11 @@ def interactive_2d_slab() -> None:
             )
         )
         query_rows.append(
-            HBox([swatch, cb], layout=Layout(align_items="center", grid_gap="8px"))
+            HBox(
+                [swatch, controls[f"query_{index}"]],
+                layout=Layout(align_items="center", grid_gap="8px"),
+            )
         )
-
-    secret_picker = Dropdown(
-        options=[("(choose corner)", "")]
-        + [(label, label) for label in _BINARY_CORNERS],
-        value="",
-        description="true b",
-        layout=Layout(width="100%"),
-        style={"description_width": "52px"},
-    )
-    alpha_slider = FloatSlider(
-        min=0.0,
-        max=1.0,
-        step=0.05,
-        value=0.3,
-        description="alpha",
-        readout=True,
-        readout_format=".2f",
-        continuous_update=False,
-        layout=Layout(width="100%"),
-        style={"description_width": "48px"},
-    )
     legend_html = HTML(
         value=(
             "<div style='font-size:12px;line-height:1.45;border:1px solid #adb5bd;"
@@ -459,140 +514,55 @@ def interactive_2d_slab() -> None:
             f"<span style='display:inline-block;color:{_TRUE_B_COLOR};font-weight:bold;"
             "font-size:14px;margin-right:9px'>×</span>true b"
             "</div>"
-        ),
-        layout=Layout(width="100%"),
+        )
     )
-
     side_controls = VBox(
         [
-            secret_picker,
+            controls["true_b"],
             HTML("<b>Queries</b>"),
             VBox(query_rows),
             HTML("<b>Accuracy bound</b>"),
-            alpha_slider,
+            controls["alpha"],
             legend_html,
+            errors,
         ],
         layout=Layout(
             width="230px",
             min_width="230px",
             max_width="230px",
             flex="0 0 230px",
-            padding="0",
             align_self="flex-start",
         ),
     )
-    plot_image = WidgetImage(
-        format="png",
-        layout=Layout(width="380px", height="auto"),
-    )
     plot_box = VBox(
-        [plot_image],
+        [image],
         layout=Layout(
             border="1px solid #ced4da",
             padding="2px",
             align_self="flex-start",
         ),
     )
-
-    state = {"blocked": True, "token": 0}
-
-    def _show_figure(fig: plt.Figure) -> None:
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=120)
-        plt.close(fig)
-        buf.seek(0)
-        plot_image.value = buf.getvalue()
-
-    def _update(*_: Any) -> None:
-        if state["blocked"]:
-            return
-        state["token"] += 1
-        token = state["token"]
-
-        secret_key = secret_picker.value
-        b = np.array(_BINARY_CORNERS[secret_key], dtype=float) if secret_key else None
-        alpha = float(alpha_slider.value)
-        active = [
-            (label, q, spec_idx)
-            for spec_idx, (label, q) in enumerate(query_specs)
-            if checkboxes[label].value
-        ]
-
-        if token != state["token"]:
-            return
-        if b is None or not active:
-            fig, ax = plt.subplots(figsize=(4.0, 3.4))
-            ax.set_xlim(-0.16, 1.16)
-            ax.set_ylim(-0.16, 1.16)
-            ax.set_xticks([0, 1])
-            ax.set_yticks([0, 1])
-            ax.axvline(0.5, linestyle=":", linewidth=1, color="gray")
-            ax.axhline(0.5, linestyle=":", linewidth=1, color="gray")
-            for cx in (0, 1):
-                for cy in (0, 1):
-                    ax.plot(
-                        cx,
-                        cy,
-                        "o",
-                        markersize=8,
-                        fillstyle="none",
-                        color="black",
-                        alpha=0.35,
-                        zorder=5,
-                    )
-            if b is not None:
-                ax.scatter(
-                    [float(b[0])],
-                    [float(b[1])],
-                    marker="x",
-                    s=90,
-                    c=_TRUE_B_COLOR,
-                    linewidths=2.2,
-                    zorder=7,
-                )
-            ax.set_xlabel(r"$x_1$")
-            ax.set_ylabel(r"$x_2$")
-            title = (
-                "Choose true b before drawing query slabs"
-                if b is None
-                else "Select at least one query"
-            )
-            ax.set_title(title)
-            ax.set_aspect("equal")
-            _show_figure(fig)
-            return
-
-        _labels, queries, color_indices = zip(*active)
-        queries_list = list(queries)
-        b_draw = b if b is not None else np.array([0.0, 0.0])
-        responses = [float(np.dot(q, b_draw)) for q in queries_list]
-        slab_region = compute_2d_slab_region(queries_list, b_draw, alpha)
-        fig, ax = plt.subplots(figsize=(4.0, 3.4))
-        draw_2d_slabs(
-            ax,
-            slab_region,
-            queries_list,
-            b,
-            alpha,
-            query_color_indices=list(color_indices),
-            responses=responses,
-            show_true_b=b is not None,
-            show_legend=False,
-        )
-        _show_figure(fig)
-
-    for cb in checkboxes.values():
-        cb.observe(_update, names="value")
-    secret_picker.observe(_update, names="value")
-    alpha_slider.observe(_update, names="value")
-
-    body = HBox(
+    return HBox(
         [plot_box, side_controls],
         layout=Layout(width="640px", align_items="flex-start", grid_gap="16px"),
     )
-    display(body)
-    state["blocked"] = False
-    _update()
+
+
+def interactive_2d_slab() -> Any:
+    """Launch the 2D slab explorer through the shared image renderer."""
+
+    if not HAS_WIDGETS:
+        print("ipywidgets is not installed; 2D slab widget unavailable.")
+        return None
+    from IPython.display import display
+
+    rendered = render_matplotlib_ipywidgets(
+        reconstruction_2d_slab_spec(),
+        layout=_slab_2d_widget_layout,
+        dpi=120,
+    )
+    display(rendered.root)
+    return rendered.root
 
 
 def plot_query_matrix_overview(
@@ -767,5 +737,3 @@ def plot_candidate_elimination_panels(
     )
     fig.tight_layout()
     _display_figure(fig)
-
-

@@ -1,7 +1,8 @@
-import ipywidgets as widgets
-import numpy as np
 import plotly.graph_objects as go
 from IPython.display import display
+
+from .interactive import ControlSpec, InteractiveSpec
+from .interactive_widgets import render_ipywidgets
 
 
 class PlotMethod:
@@ -11,12 +12,21 @@ class PlotMethod:
 
 
 class PlotSlider:
-    def __init__(self, description, initial_value, min_value, max_value, step):
+    def __init__(
+        self,
+        description,
+        initial_value,
+        min_value,
+        max_value,
+        step,
+        continuous_update=True,
+    ):
         self.description = description
         self.initial_value = initial_value
         self.min_value = min_value
         self.max_value = max_value
         self.step = step
+        self.continuous_update = continuous_update
 
 
 class PlotAxisData:
@@ -52,66 +62,60 @@ class InteractivePlot:
         self.x_range = meta_data.x_axis.range
         self.y_range = meta_data.y_axis.range
 
-        self.fig = go.FigureWidget()
-        for method in methods:
-            self.fig.add_trace(go.Scatter(x=[], y=[], name=method.name, line=dict(width=2)))
-
-        self.sliders = []
-        for slider_data in sliders_data:
-            self.sliders.append(
-                widgets.FloatSlider(
-                    value=slider_data.initial_value,
-                    min=slider_data.min_value,
-                    max=slider_data.max_value,
-                    step=slider_data.step,
-                    description=slider_data.description,
-                    continuous_update=False,
-                )
+        controls = tuple(
+            ControlSpec(
+                name=f"value_{index}",
+                kind="slider",
+                label=slider.description,
+                default=slider.initial_value,
+                min=slider.min_value,
+                max=slider.max_value,
+                step=slider.step,
+                continuous=slider.continuous_update,
             )
-            self.sliders[-1].observe(self.update_plot, 'value')
-
-        self.fig.update_layout(
-            title=meta_data.title,
-            xaxis_title=meta_data.x_axis.title,
-            xaxis_type=meta_data.x_axis.type,
-            yaxis_title=meta_data.y_axis.title,
-            yaxis_type=meta_data.y_axis.type,
-            showlegend=True,
-            width=meta_data.width,
-            height=meta_data.height,
+            for index, slider in enumerate(sliders_data)
         )
-        if self.x_range is not None:
-            self.fig.update_xaxes(range=self.x_range)
-        if self.y_range is not None:
-            self.fig.update_yaxes(range=self.y_range)
-        if self.title_func is not None:
-            args = self.arg_creator(self.hyper_params, *[slider.value for slider in self.sliders])
-            self.fig.update_layout(title_text=self.title_func(**args))
 
-        self.update_plot()
+        def make_figure(**values):
+            positional_values = [values[f"value_{index}"] for index in range(len(controls))]
+            arguments = self.arg_creator(self.hyper_params, *positional_values)
+            figure = go.Figure()
+            for method in self.methods:
+                x, y = method.function(**arguments)
+                figure.add_trace(go.Scatter(x=x, y=y, name=method.name, line={"width": 2}))
+            figure.update_layout(
+                title=(
+                    self.title_func(**arguments) if self.title_func is not None else meta_data.title
+                ),
+                xaxis_title=meta_data.x_axis.title,
+                xaxis_type=meta_data.x_axis.type,
+                yaxis_title=meta_data.y_axis.title,
+                yaxis_type=meta_data.y_axis.type,
+                showlegend=True,
+                width=meta_data.width,
+                height=meta_data.height,
+            )
+            if self.x_range is not None:
+                figure.update_xaxes(range=self.x_range)
+            if self.y_range is not None:
+                figure.update_yaxes(range=self.y_range)
+            return figure
+
+        spec = InteractiveSpec(
+            name="legacy_interactive_plot",
+            artifact_name="legacy-interactive-plot",
+            controls=controls,
+            preferred_backend="ipywidgets",
+            allowed_backends=("ipywidgets",),
+            make_figure=make_figure,
+            figure_factory=f"{__name__}:InteractivePlot",
+        )
+        self._rendered = render_ipywidgets(spec)
+        self.fig = self._rendered.figure
+        self.sliders = list(self._rendered.controls.values())
 
     def update_plot(self, *args):
-        args = self.arg_creator(self.hyper_params, *[slider.value for slider in self.sliders])
-        x_min = np.inf
-        x_max = -np.inf
-        y_min = np.inf
-        y_max = -np.inf
-        with self.fig.batch_update():
-            for i, method in enumerate(self.methods):
-                x, y = method.function(**args)
-                self.fig.data[i].x = x
-                self.fig.data[i].y = y
-                x_min = min(x_min, np.min(x))
-                x_max = max(x_max, np.max(x))
-                y_min = min(y_min, np.min(y))
-                y_max = max(y_max, np.max(y))
-        if self.title_func is not None:
-            self.fig.update_layout(title_text=self.title_func(**args))
-        if self.x_range is not None:
-            self.fig.update_xaxes(range=[x_min, x_max])
-        if self.y_range is not None:
-            self.fig.update_yaxes(range=[y_min, y_max])
+        self._rendered.update()
 
     def show(self):
-        # Display widgets and plot
-        display(widgets.VBox([self.fig, widgets.HBox(*[self.sliders])]))
+        display(self._rendered.root)

@@ -1,16 +1,24 @@
 import math
 from enum import Enum
-
-from IPython.core.display_functions import display
-from ipywidgets import FloatSlider, Button, interactive, VBox, HBox
-from matplotlib import pyplot as plt
-
-from scipy.stats import rv_continuous as Distribution, norm, laplace, uniform
-import numpy as np
+from functools import partial
 from typing import Callable
+
+import numpy as np
 import plotly.graph_objects as go
+from IPython.core.display_functions import display
 from plotly.subplots import make_subplots
+from scipy.stats import laplace, norm
+from scipy.stats import rv_continuous as Distribution
+from scipy.stats import uniform
 from sklearn.metrics import auc, roc_curve
+
+from .interactive import (
+    AbstractInteractivePlot,
+    ActionSpec,
+    ControlSpec,
+    InteractiveSpec,
+    declarative_plotly_from_spec,
+)
 
 
 class ComparisonType(Enum):
@@ -184,78 +192,42 @@ def draw_ROCs_and_diag_from_desicion_rule(
         )
 
 
-def ROC_and_distributions_visualization(
+def make_roc_decision_figure(
+    decision_parameter: float,
+    *,
     desicion_rule_params: Callable,
     dist0: Distribution,
     dist1: Distribution,
     by_threshold: bool,
     res: int = 100,
 ):
-    # set the location of the two subplot titles to the center
-    fig = make_subplots(
+    """Build one distribution/ROC state for a concrete decision parameter."""
+
+    if res < 2:
+        raise ValueError("res must be at least 2")
+    figure = make_subplots(
         rows=1,
         cols=2,
         subplot_titles=("Distributions PDF", "ROC Curve"),
         column_widths=[0.45, 0.45],
         horizontal_spacing=0.1,
     )
-
-    # Draw the two distributions in the first subplot
-    draw_two_distributions(dist0, dist1, fig, res)
-    # Draw the ROC curve and a diagonal line in the second subplot
+    draw_two_distributions(dist0, dist1, figure, res)
     draw_ROCs_and_diag_from_desicion_rule(
-        desicion_rule_params, [[dist0, dist1]], fig, by_threshold, 2, res
+        desicion_rule_params, [[dist0, dist1]], figure, by_threshold, 2, res
     )
-    # Set params for the decision rule
-    if by_threshold:
-        param = (dist0.mean() + dist1.mean()) / 2
-        param_type = ComparisonType.GENERAL
-        param_title = "Threshold"
-        param_range = range_from_distribution(dist0, dist1, res)
-    else:
-        param = 0.5
-        param_type = check_comparison_type(dist0, dist1)
-        param_title = "FPR"
-        param_range = np.linspace(0.0001, 0.9999, res)
-    # Add initial ROC marker and threshold line
-    fig.update_layout(
+    parameter_type = ComparisonType.GENERAL if by_threshold else check_comparison_type(dist0, dist1)
+    figure.update_layout(
         shapes=create_ROC_point_and_thresholds(
-            desicion_rule_params, dist0, dist1, param, param_type, res
-        )
-    )
-    # color the area to the left of the threshold in light blue and the area to the right in light red
-
-    # Add slider steps for interactivity
-    steps = [
-        dict(
-            method="relayout",
-            args=[
-                dict(
-                    shapes=create_ROC_point_and_thresholds(
-                        desicion_rule_params, dist0, dist1, param, param_type, res
-                    )
-                )
-            ],
-            label=f"{param:.2f}",
-            execute=True,
-        )
-        for param in param_range
-    ]
-    sliders = [
-        dict(
-            active=param,
-            currentvalue=dict(prefix=param_title, font={'size': 14}),
-            pad={"t": 40},
-            steps=steps,
-        )
-    ]
-
-    # Update layout
-    fig.update_layout(
+            desicion_rule_params,
+            dist0,
+            dist1,
+            decision_parameter,
+            parameter_type,
+            res,
+        ),
         height=500,
         autosize=True,
-        # Reserve top margin so the title sits above the subplots instead of
-        # overlapping them when the figure is scaled to fit a slide.
         margin=dict(t=90, b=40, l=60, r=30),
         title=dict(
             text="Two distributions and their ROC curve",
@@ -266,14 +238,84 @@ def ROC_and_distributions_visualization(
             font=dict(size=20, color='black', family='Arial', weight='bold'),
         ),
         xaxis=dict(title=dict(text="Value"), domain=[0.0, 0.45]),
-        yaxis=dict(
-            title=dict(text="Probability Density"),
+        yaxis=dict(title=dict(text="Probability Density")),
+        xaxis2=dict(
+            title=dict(text="False Positive Rate (FPR)"),
+            domain=[0.55, 1.0],
         ),
-        xaxis2=dict(title=dict(text="False Positive Rate (FPR)"), domain=[0.55, 1.0]),
         yaxis2=dict(title=dict(text="True Positive Rate (TPR)"), domain=[0, 1]),
-        sliders=sliders,
     )
-    return fig
+    return figure
+
+
+def roc_decision_spec(
+    desicion_rule_params: Callable,
+    dist0: Distribution,
+    dist1: Distribution,
+    by_threshold: bool,
+    res: int = 100,
+) -> tuple[InteractiveSpec, np.ndarray]:
+    """Return the one-control ROC specification and its finite display grid."""
+
+    slider_states = min(res, 101)
+    if by_threshold:
+        parameter_values = range_from_distribution(dist0, dist1, slider_states)
+        default = (dist0.mean() + dist1.mean()) / 2
+        label = "Threshold"
+    else:
+        parameter_values = np.linspace(0.0001, 0.9999, slider_states)
+        default = 0.5
+        label = "FPR"
+    spec = InteractiveSpec(
+        name="roc_decision_explorer",
+        artifact_name="roc-decision-explorer",
+        controls=(
+            ControlSpec(
+                name="decision_parameter",
+                kind="slider",
+                label=label,
+                default=float(default),
+                min=float(parameter_values[0]),
+                max=float(parameter_values[-1]),
+                step=float(parameter_values[1] - parameter_values[0]),
+            ),
+        ),
+        preferred_backend="plotly-declarative",
+        allowed_backends=("ipywidgets", "plotly-declarative"),
+        make_figure=make_roc_decision_figure,
+        figure_factory="libdpy.visualization.roc_plots:make_roc_decision_figure",
+        fixed_kwargs={
+            "desicion_rule_params": desicion_rule_params,
+            "dist0": dist0,
+            "dist1": dist1,
+            "by_threshold": by_threshold,
+            "res": res,
+        },
+    )
+    return spec, parameter_values
+
+
+def ROC_and_distributions_visualization(
+    desicion_rule_params: Callable,
+    dist0: Distribution,
+    dist1: Distribution,
+    by_threshold: bool,
+    res: int = 100,
+):
+    spec, parameter_values = roc_decision_spec(
+        desicion_rule_params,
+        dist0,
+        dist1,
+        by_threshold,
+        res,
+    )
+    return declarative_plotly_from_spec(
+        spec,
+        {"decision_parameter": parameter_values},
+        max_states=200,
+        max_json_mb=5.0,
+        assume_constant_data=True,
+    )
 
 
 def check_comparison_type(dist0: Distribution, dist1: Distribution) -> ComparisonType:
@@ -343,112 +385,380 @@ def calc_privacy_bound(log_slope: float, shift: float, res) -> tuple[np.ndarray,
     return x, y
 
 
-class EmpROCVisualizer:
-    def __init__(self, n_samples):
-        self.n_samples = n_samples
-        self.scale_slider = FloatSlider(
-            min=0.1, max=2.0, step=0.1, value=1.0, description='σ:', continuous_update=False
+def _empirical_distribution(name: str):
+    normalized = name.strip().lower()
+    if normalized in {"gaussian", "normal", "norm"}:
+        return "Gaussian", norm
+    if normalized == "laplace":
+        return "Laplace", laplace
+    raise ValueError("distribution must be 'Gaussian' or 'Laplace'")
+
+
+def _generate_empirical_roc_samples(
+    distribution: str,
+    scale: float,
+    n_samples: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    _, distribution_type = _empirical_distribution(distribution)
+    rng = np.random.default_rng(seed)
+    negative_samples = distribution_type.rvs(
+        loc=0,
+        scale=scale,
+        size=n_samples,
+        random_state=rng,
+    )
+    positive_samples = distribution_type.rvs(
+        loc=1,
+        scale=scale,
+        size=n_samples,
+        random_state=rng,
+    )
+    labels = np.concatenate([np.zeros(n_samples, dtype=int), np.ones(n_samples, dtype=int)])
+    return np.concatenate([negative_samples, positive_samples]), labels
+
+
+def make_empirical_roc_figure(
+    distribution: str,
+    scale: float,
+    n_samples: int,
+    sample_seed: int | None = None,
+    *,
+    resolution: int = 1000,
+    histogram_bins: int | None = None,
+) -> go.Figure:
+    """Build the Gaussian/Laplace theoretical and empirical ROC explorer."""
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if histogram_bins is not None and histogram_bins <= 0:
+        raise ValueError("histogram_bins must be positive")
+    resolved_histogram_bins = (
+        max(5, int(math.ceil(math.sqrt(n_samples)))) if histogram_bins is None else histogram_bins
+    )
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    dist_negative = distribution_type(loc=0, scale=scale)
+    dist_positive = distribution_type(loc=1, scale=scale)
+    lower = min(dist_negative.ppf(0.001), dist_positive.ppf(0.001))
+    upper = max(dist_negative.ppf(0.999), dist_positive.ppf(0.999))
+    samples = None
+    labels = None
+    if sample_seed is not None:
+        samples, labels = _generate_empirical_roc_samples(
+            display_name,
+            scale,
+            n_samples,
+            sample_seed,
         )
-        self.sample_button = Button(description='Generate Samples', button_style='info')
-        self.sample_button.on_click(self.on_button_clicked)
-        self.samples = None
+        lower = min(lower, float(np.min(samples)))
+        upper = max(upper, float(np.max(samples)))
 
-        # Create the interactive plot
-        self.interactive_plot = interactive(self.plot_curves, scale=self.scale_slider)
+    x = np.linspace(lower, upper, resolution)
+    thresholds = np.linspace(lower, upper, resolution)
+    fpr_theoretical = dist_negative.sf(thresholds)
+    tpr_theoretical = dist_positive.sf(thresholds)
+    theoretical_auc = auc(fpr_theoretical, tpr_theoretical)
 
-        # Display widgets
-        display(
-            VBox(
-                [HBox([self.scale_slider, self.sample_button]), self.interactive_plot.children[-1]]
-            )
+    figure = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Probability Density Functions", "ROC Curves"),
+        horizontal_spacing=0.08,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=dist_negative.pdf(x),
+            mode="lines",
+            name="Negative theory",
+            line={"color": "red"},
+            legend="legend",
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=x,
+            y=dist_positive.pdf(x),
+            mode="lines",
+            name="Positive theory",
+            line={"color": "blue"},
+            legend="legend",
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=fpr_theoretical,
+            y=tpr_theoretical,
+            mode="lines",
+            name=f"Theoretical ROC — AUC {theoretical_auc:.3f}",
+            line={"color": "purple"},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+
+    if samples is not None and labels is not None:
+        bin_size = (upper - lower) / resolved_histogram_bins
+        common_bins = {"start": lower, "end": upper, "size": bin_size}
+        figure.add_trace(
+            go.Histogram(
+                x=samples[labels == 0],
+                histnorm="probability density",
+                xbins=common_bins,
+                opacity=0.4,
+                name="Negative samples",
+                marker_color="red",
+                legend="legend",
+            ),
+            row=1,
+            col=1,
+        )
+        figure.add_trace(
+            go.Histogram(
+                x=samples[labels == 1],
+                histnorm="probability density",
+                xbins=common_bins,
+                opacity=0.4,
+                name="Positive samples",
+                marker_color="blue",
+                legend="legend",
+            ),
+            row=1,
+            col=1,
+        )
+        fpr_empirical, tpr_empirical, _ = roc_curve(labels, samples)
+        empirical_auc = auc(fpr_empirical, tpr_empirical)
+        figure.add_trace(
+            go.Scatter(
+                x=fpr_empirical,
+                y=tpr_empirical,
+                mode="lines",
+                name=f"Empirical ROC — AUC {empirical_auc:.3f}",
+                line={"color": "green", "dash": "dash"},
+                legend="legend2",
+            ),
+            row=1,
+            col=2,
         )
 
-    def generate_samples(self, scale):
-        negative_samples = np.random.laplace(0, scale, self.n_samples)
-        positive_samples = np.random.laplace(1, scale, self.n_samples)
-        labels = np.concatenate([np.zeros(self.n_samples), np.ones(self.n_samples)])
-        samples = np.concatenate([negative_samples, positive_samples])
-        return samples, labels
+    figure.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="lines",
+            name="Random classifier",
+            line={"color": "black", "dash": "dash"},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+    figure.update_layout(
+        title=(
+            f"{display_name} distributions: scale={scale:.2f}, " f"samples per class={n_samples}"
+        ),
+        width=1000,
+        height=580,
+        autosize=False,
+        barmode="overlay",
+        legend={
+            "orientation": "v",
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.99,
+            "yanchor": "top",
+            "bgcolor": "rgba(255,255,255,0.78)",
+            "bordercolor": "rgba(0,0,0,0.18)",
+            "borderwidth": 1,
+            "font": {"size": 11},
+        },
+        legend2={
+            "orientation": "v",
+            "x": 0.99,
+            "xanchor": "right",
+            "y": 0.03,
+            "yanchor": "bottom",
+            "bgcolor": "rgba(255,255,255,0.78)",
+            "bordercolor": "rgba(0,0,0,0.18)",
+            "borderwidth": 1,
+            "font": {"size": 11},
+        },
+        margin={"t": 90, "b": 70, "l": 65, "r": 35},
+    )
+    figure.update_xaxes(title_text="x", range=[lower, upper], row=1, col=1)
+    figure.update_yaxes(title_text="Probability Density", row=1, col=1)
+    figure.update_xaxes(
+        title_text="False Positive Rate",
+        range=[0, 1],
+        row=1,
+        col=2,
+    )
+    figure.update_yaxes(
+        title_text="True Positive Rate",
+        range=[0, 1],
+        row=1,
+        col=2,
+    )
+    return figure
 
-    def on_button_clicked(self, b):
-        self.samples = self.generate_samples(self.scale_slider.value)
-        self.interactive_plot.update()
 
-    def plot_curves(self, scale):
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+class EmpROCVisualizer(AbstractInteractivePlot):
+    """Gaussian/Laplace ROC explorer backed by the generic interactive engine."""
 
-        # Generate x values for theoretical distributions
-        x = np.linspace(-4, 5, 1000)
-        pdf_negative = laplace.pdf(x, loc=0, scale=scale)
-        pdf_positive = laplace.pdf(x, loc=1, scale=scale)
+    def __init__(
+        self,
+        n_samples: int,
+        distribution: str = "Laplace",
+        scale: float = 1.0,
+        *,
+        random_seed: int | None = None,
+        auto_display: bool = True,
+    ):
+        if n_samples <= 0:
+            raise ValueError("n_samples must be positive")
+        if scale <= 0:
+            raise ValueError("scale must be positive")
 
-        # Plot theoretical distributions
-        ax1.plot(x, pdf_negative, 'b-', label='Theoretical Negative (μ=0)', alpha=0.7)
-        ax1.plot(x, pdf_positive, 'r-', label='Theoretical Positive (μ=1)', alpha=0.7)
+        self.n_samples = int(n_samples)
+        self.distribution = _empirical_distribution(distribution)[0]
+        self.scale = float(scale)
+        self._seed_generator = np.random.default_rng(random_seed)
+        self._rendered = self.widget()
 
-        # Plot empirical distributions if samples exist
-        if self.samples is not None:
-            samples, labels = self.samples
+        # Preserve the useful public attributes from the original implementation.
+        self.distribution_control = self._rendered.controls["distribution"]
+        self.scale_slider = self._rendered.controls["scale"]
+        self.sample_count_slider = self._rendered.controls["n_samples"]
+        self.sample_button = self._rendered.actions["generate_samples"]
+        self.interactive_plot = self._rendered.root
 
-            # Create histograms
-            ax1.hist(
-                samples[labels == 0],
-                bins=30,
-                density=True,
-                alpha=0.5,
-                color='blue',
-                label='Empirical Negative',
-            )
-            ax1.hist(
-                samples[labels == 1],
-                bins=30,
-                density=True,
-                alpha=0.5,
-                color='red',
-                label='Empirical Positive',
-            )
+        if auto_display:
+            display(self._rendered.root)
 
-        ax1.set_title('Probability Density Functions')
-        ax1.set_xlabel('x')
-        ax1.set_ylabel('Probability Density')
-        ax1.legend()
-        ax1.grid(True)
+    def _generate_samples_action(self, state, _controls):
+        state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
+        return None
 
-        # Calculate theoretical ROC curve
-        thresholds = np.linspace(-4, 5, 1000)
-        tpr_theo = []
-        fpr_theo = []
-
-        for threshold in thresholds:
-            tp = 1 - laplace.cdf(threshold, loc=1, scale=scale)
-            fp = 1 - laplace.cdf(threshold, loc=0, scale=scale)
-            tpr_theo.append(tp)
-            fpr_theo.append(fp)
-
-        # Calculate theoretical AUC
-        roc_auc_theo = auc(fpr_theo, tpr_theo)
-
-        # Plot theoretical ROC curve
-        ax2.plot(
-            fpr_theo, tpr_theo, 'b-', label=f'Theoretical ROC (AUC = {roc_auc_theo:.3f})', alpha=0.7
+    def spec(self) -> InteractiveSpec:
+        return InteractiveSpec(
+            name="empirical_roc_visualizer",
+            artifact_name="empirical-roc-visualizer",
+            controls=(
+                ControlSpec(
+                    name="distribution",
+                    kind="select",
+                    label="Distribution",
+                    default=self.distribution,
+                    values=("Laplace", "Gaussian"),
+                ),
+                ControlSpec(
+                    name="scale",
+                    kind="slider",
+                    label="Scale",
+                    default=self.scale,
+                    min=0.1,
+                    max=2.0,
+                    step=0.1,
+                    continuous=True,
+                ),
+                ControlSpec(
+                    name="n_samples",
+                    kind="slider",
+                    label="Samples / class",
+                    default=self.n_samples,
+                    min=10,
+                    max=max(5000, self.n_samples),
+                    step=0.05,
+                    continuous=True,
+                    slider_scale="log",
+                ),
+            ),
+            preferred_backend="ipywidgets",
+            allowed_backends=("ipywidgets",),
+            make_figure=partial(
+                make_empirical_roc_figure,
+                resolution=1000,
+            ),
+            figure_factory=("libdpy.visualization.roc_plots:make_empirical_roc_figure"),
+            description=("Gaussian/Laplace theoretical and empirical ROC explorer."),
+            actions=(
+                ActionSpec(
+                    name="generate_samples",
+                    label="Generate Samples",
+                    handler=self._generate_samples_action,
+                    button_style="info",
+                ),
+            ),
+            initial_state={"sample_seed": None},
         )
 
-        # Plot empirical ROC curve if samples exist
-        if self.samples is not None:
-            samples, labels = self.samples
-            fpr_emp, tpr_emp, _ = roc_curve(labels, samples)
-            roc_auc_emp = auc(fpr_emp, tpr_emp)
+    @property
+    def samples(self) -> tuple[np.ndarray, np.ndarray] | None:
+        sample_seed = self._rendered.state["sample_seed"]
+        if sample_seed is None:
+            return None
+        return _generate_empirical_roc_samples(
+            self.distribution_control.value,
+            self.scale_slider.value,
+            int(round(self.sample_count_slider.value)),
+            sample_seed,
+        )
 
-            ax2.plot(fpr_emp, tpr_emp, 'g--', label=f'Empirical ROC (AUC = {roc_auc_emp:.3f})')
+    def generate_samples(
+        self,
+        scale: float,
+        distribution: str | None = None,
+        n_samples: int | None = None,
+        seed: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Generate samples directly; the old ``generate_samples(scale)`` still works."""
 
-        # Add random classifier line
-        ax2.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+        resolved_seed = (
+            int(self._seed_generator.integers(0, np.iinfo(np.int32).max)) if seed is None else seed
+        )
+        return _generate_empirical_roc_samples(
+            distribution or self.distribution,
+            scale,
+            n_samples or self.n_samples,
+            resolved_seed,
+        )
 
-        ax2.set_xlabel('False Positive Rate')
-        ax2.set_ylabel('True Positive Rate')
-        ax2.set_title('ROC Curves')
-        ax2.legend()
-        ax2.grid(True)
+    def on_button_clicked(self, _button=None) -> None:
+        """Compatibility callback that triggers the generic resampling action."""
 
-        plt.tight_layout()
-        plt.show()
+        self._generate_samples_action(
+            self._rendered.state,
+            {name: control.value for name, control in self._rendered.controls.items()},
+        )
+        self._rendered.update()
+
+    def plot_curves(
+        self,
+        scale: float,
+        distribution: str | None = None,
+        n_samples: int | None = None,
+    ) -> go.Figure:
+        """Return the current state as a Plotly figure."""
+
+        return make_empirical_roc_figure(
+            distribution or self.distribution,
+            scale,
+            n_samples or self.n_samples,
+            self._rendered.state["sample_seed"],
+        )
+
+    def show(self):
+        """Display the already-created widget without rebuilding its state."""
+
+        display(self._rendered.root)
+        return self._rendered.root

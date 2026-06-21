@@ -6,12 +6,12 @@ import hashlib
 import json
 import math
 from collections.abc import Sequence
-from functools import partial
 from statistics import NormalDist
 
 import plotly.graph_objects as go
 
-from .interactive import ControlSpec, InteractiveSpec, iframe_embed
+from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec, iframe_embed
+from .interactive_widgets import render_ipywidgets
 
 
 def _linspace(start: float, stop: float, count: int) -> list[float]:
@@ -129,10 +129,7 @@ def _named_distribution_roc(
     upper = _distribution_ppf(name, 0.999, 0, std)
     thresholds = _linspace(lower, upper, res)
     fpr = [1 - _distribution_cdf(name, threshold, 0, std) for threshold in thresholds]
-    tpr = [
-        1 - _distribution_cdf(name, threshold, sensitivity, std)
-        for threshold in thresholds
-    ]
+    tpr = [1 - _distribution_cdf(name, threshold, sensitivity, std) for threshold in thresholds]
     return fpr, tpr
 
 
@@ -260,8 +257,8 @@ def privacy_plot_spec(
         # (interactive.py's third Backend literal) is intentionally not listed:
         # no render_jupyterlite adapter exists yet, so claiming it here would
         # let the build pick a backend it cannot actually produce.
-        allowed_backends=("wasm-marimo",),
-        make_figure=partial(make_privacy_bound_figure, **fixed_kwargs),
+        allowed_backends=("ipywidgets", "wasm-marimo"),
+        make_figure=make_privacy_bound_figure,
         figure_factory=("libdpy.visualization.privacy_plots:make_privacy_bound_figure"),
         fixed_kwargs=fixed_kwargs,
         description="Privacy bound explorer with two continuous controls.",
@@ -274,57 +271,12 @@ def privacy_plot_ipywidgets(
     std: float = 1.5,
     res: int = 100,
 ):
-    """Return the legacy notebook adapter around the pure figure factory."""
+    """Return the established widget root through the shared renderer."""
 
-    from ipywidgets import FloatSlider, HBox, VBox
-
-    distribution_names = tuple(_distribution_name(item) for item in distribution_types)
-    log_slope_slider = FloatSlider(
-        value=0.0,
-        min=0.0,
-        max=math.log(30),
-        step=0.01,
-        description="log(slope)",
-        continuous_update=False,
-    )
-    shift_slider = FloatSlider(
-        value=0.0,
-        min=0.0,
-        max=1.0,
-        step=0.01,
-        description="shift",
-        continuous_update=False,
-    )
-    figure = go.FigureWidget(
-        make_privacy_bound_figure(
-            log_slope=log_slope_slider.value,
-            shift=shift_slider.value,
-            distribution_names=distribution_names,
-            sensitivity=sensitivity,
-            std=std,
-            res=res,
-        )
-    )
-
-    def update_plot(_change=None):
-        updated = make_privacy_bound_figure(
-            log_slope=log_slope_slider.value,
-            shift=shift_slider.value,
-            distribution_names=distribution_names,
-            sensitivity=sensitivity,
-            std=std,
-            res=res,
-        )
-        with figure.batch_update():
-            figure.data[0].x = updated.data[0].x
-            figure.data[0].y = updated.data[0].y
-
-    log_slope_slider.observe(update_plot, names="value")
-    shift_slider.observe(update_plot, names="value")
-    return VBox([figure, HBox([log_slope_slider, shift_slider])])
+    return render_ipywidgets(privacy_plot_spec(distribution_types, sensitivity, std, res)).root
 
 
-class PrivacyPlot:
+class PrivacyPlot(AbstractInteractivePlot):
     """Privacy-bound explorer with notebook and static-site adapters."""
 
     def __init__(
@@ -368,9 +320,7 @@ class PrivacyPlot:
 
         if mode not in {"page", "deck"}:
             raise ValueError("mode must be 'page' or 'deck'")
-        resolved_height = (
-            height if height is not None else (620 if mode == "deck" else 750)
-        )
+        resolved_height = height if height is not None else (620 if mode == "deck" else 750)
         return iframe_embed(self.spec(), src=src, height=resolved_height)
 
 
@@ -384,9 +334,7 @@ def plot_epsilon_delta_tradeoff(
     if mechanism_names is None:
         mechanism_names = [f"Mechanism {i+1}" for i in range(len(epsilons))]
 
-    for i, (eps_list, delta_list, name) in enumerate(
-        zip(epsilons, deltas, mechanism_names)
-    ):
+    for i, (eps_list, delta_list, name) in enumerate(zip(epsilons, deltas, mechanism_names)):
         plt.plot(eps_list, delta_list, "o-", label=name, linewidth=2, markersize=6)
 
     plt.xlabel("Privacy Budget (ε)")
@@ -399,9 +347,7 @@ def plot_epsilon_delta_tradeoff(
     plt.show()
 
 
-def plot_privacy_loss_distribution(
-    privacy_losses, epsilon, title="Privacy Loss Distribution"
-):
+def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss Distribution"):
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(10, 6))
@@ -415,12 +361,8 @@ def plot_privacy_loss_distribution(
     )
 
     # Add vertical line at epsilon
-    plt.axvline(
-        epsilon, color="red", linestyle="--", linewidth=2, label=f"ε = {epsilon}"
-    )
-    plt.axvline(
-        -epsilon, color="red", linestyle="--", linewidth=2, label=f"-ε = {-epsilon}"
-    )
+    plt.axvline(epsilon, color="red", linestyle="--", linewidth=2, label=f"ε = {epsilon}")
+    plt.axvline(-epsilon, color="red", linestyle="--", linewidth=2, label=f"-ε = {-epsilon}")
 
     plt.xlabel("Privacy Loss")
     plt.ylabel("Density")

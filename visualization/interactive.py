@@ -6,18 +6,21 @@ import itertools
 import json
 import math
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, MutableMapping
 
 import plotly.graph_objects as go
+from plotly.utils import PlotlyJSONEncoder
 
-Backend = Literal["plotly-declarative", "wasm-marimo", "wasm-jupyterlite"]
+Backend = Literal["ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"]
 ControlKind = Literal["slider", "select", "checkbox", "button_group"]
+SliderScale = Literal["linear", "log"]
 
-_VALID_BACKENDS = frozenset({"plotly-declarative", "wasm-marimo", "wasm-jupyterlite"})
+_VALID_BACKENDS = frozenset({"ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"})
 _VALID_CONTROL_KINDS = frozenset({"slider", "select", "checkbox", "button_group"})
 _PYTHON_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -34,7 +37,11 @@ class ControlSpec:
     max: float | None = None
     step: float | None = None
     values: Sequence[float | int | str | bool] | None = None
-    continuous: bool = False
+    continuous: bool = True
+    slider_scale: SliderScale = "linear"
+    readout_format: str | None = None
+    throttle_ms: int | None = None
+    description: str = ""
 
     def __post_init__(self) -> None:
         if not _PYTHON_IDENTIFIER.fullmatch(self.name):
@@ -50,8 +57,42 @@ class ControlSpec:
                 raise ValueError(f"slider {self.name!r} requires a positive step")
             if not self.min <= float(self.default) <= self.max:
                 raise ValueError(f"slider {self.name!r} default is outside its range")
-        elif self.values is None:
-            raise ValueError(f"control {self.name!r} requires explicit values")
+            if self.slider_scale not in {"linear", "log"}:
+                raise ValueError(
+                    f"slider {self.name!r} has unsupported scale {self.slider_scale!r}"
+                )
+            if self.slider_scale == "log" and (
+                self.min <= 0 or self.max <= 0 or float(self.default) <= 0
+            ):
+                raise ValueError(f"log slider {self.name!r} requires positive values")
+        elif self.kind in {"select", "button_group"}:
+            if self.values is None:
+                raise ValueError(f"control {self.name!r} requires explicit values")
+            if self.default not in self.values:
+                raise ValueError(f"control {self.name!r} default is not one of its values")
+        elif self.kind == "checkbox" and not isinstance(self.default, bool):
+            raise ValueError(f"checkbox {self.name!r} requires a boolean default")
+        if self.throttle_ms is not None and self.throttle_ms < 0:
+            raise ValueError(f"control {self.name!r} throttle_ms must be nonnegative")
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    """Describe a state-changing action for an interactive notebook widget."""
+
+    name: str
+    label: str
+    handler: Callable[
+        [MutableMapping[str, Any], Mapping[str, float | int | str | bool]],
+        Mapping[str, Any] | None,
+    ]
+    button_style: str = ""
+
+    def __post_init__(self) -> None:
+        if not _PYTHON_IDENTIFIER.fullmatch(self.name):
+            raise ValueError(f"action name must be a Python identifier: {self.name!r}")
+        if not self.label:
+            raise ValueError("action label must not be empty")
 
 
 @dataclass(frozen=True)
@@ -67,18 +108,16 @@ class InteractiveSpec:
     figure_factory: str
     fixed_kwargs: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
+    actions: Sequence[ActionSpec] = ()
+    initial_state: Mapping[str, Any] | Callable[[], Mapping[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("interactive name must not be empty")
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", self.artifact_name):
-            raise ValueError(
-                "artifact_name must contain lowercase letters, digits, and hyphens"
-            )
+            raise ValueError("artifact_name must contain lowercase letters, digits, and hyphens")
         if self.preferred_backend not in _VALID_BACKENDS:
-            raise ValueError(
-                f"unsupported preferred backend: {self.preferred_backend!r}"
-            )
+            raise ValueError(f"unsupported preferred backend: {self.preferred_backend!r}")
         if self.preferred_backend not in self.allowed_backends:
             raise ValueError("preferred_backend must be included in allowed_backends")
         if any(backend not in _VALID_BACKENDS for backend in self.allowed_backends):
@@ -86,14 +125,83 @@ class InteractiveSpec:
         names = [control.name for control in self.controls]
         if len(names) != len(set(names)):
             raise ValueError("control names must be unique")
+        action_names = [action.name for action in self.actions]
+        if len(action_names) != len(set(action_names)):
+            raise ValueError("action names must be unique")
+        if set(names) & set(action_names):
+            raise ValueError("control and action names must be distinct")
         if ":" not in self.figure_factory:
             raise ValueError("figure_factory must use the 'module:function' format")
 
     def default_values(self) -> dict[str, float | int | str | bool]:
         return {control.name: control.default for control in self.controls}
 
+    def new_state(self) -> dict[str, Any]:
+        initial = self.initial_state() if callable(self.initial_state) else self.initial_state
+        return dict(initial)
+
+    def figure_kwargs(
+        self,
+        control_values: Mapping[str, float | int | str | bool] | None = None,
+        state: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            **dict(self.fixed_kwargs),
+            **(self.default_values() if control_values is None else dict(control_values)),
+            **(self.new_state() if state is None else dict(state)),
+        }
+
     def default_figure(self) -> object:
-        return self.make_figure(**self.default_values())
+        return self.make_figure(**self.figure_kwargs())
+
+
+class AbstractInteractivePlot(ABC):
+    """Base class for plot-specific wrappers backed by an ``InteractiveSpec``."""
+
+    @abstractmethod
+    def spec(self) -> InteractiveSpec:
+        """Return the backend-neutral specification for this plot."""
+
+    def build_spec(self) -> InteractiveSpec:
+        """Alias used by the refactor plan and newer plot wrappers."""
+
+        return self.spec()
+
+    def widget(self, **renderer_options):
+        """Build the live notebook widget through the shared renderer."""
+
+        from .interactive_widgets import render_ipywidgets
+
+        return render_ipywidgets(self.build_spec(), **renderer_options)
+
+    def figure(self, **control_values) -> go.Figure:
+        """Build a concrete figure without creating or displaying widgets."""
+
+        spec = self.build_spec()
+        values = {**spec.default_values(), **control_values}
+        figure = spec.make_figure(**spec.figure_kwargs(values))
+        if not isinstance(figure, go.Figure):
+            raise TypeError("Plotly interactive figure factories must return plotly.go.Figure")
+        return figure
+
+    def show(self, **renderer_options):
+        """Display and return the live notebook widget."""
+
+        from IPython.display import display
+
+        rendered = self.widget(**renderer_options)
+        display(rendered.root)
+        return rendered.root
+
+
+class SpecInteractivePlot(AbstractInteractivePlot):
+    """Concrete adapter for callers that already have an ``InteractiveSpec``."""
+
+    def __init__(self, spec: InteractiveSpec):
+        self._spec = spec
+
+    def spec(self) -> InteractiveSpec:
+        return self._spec
 
 
 @dataclass(frozen=True)
@@ -181,6 +289,7 @@ def declarative_plotly_from_spec(
     *,
     max_states: int = 200,
     max_json_mb: float = 5.0,
+    assume_constant_data: bool = False,
 ) -> go.Figure:
     """Precompute a one-control finite state space as a static Plotly figure.
 
@@ -190,6 +299,11 @@ def declarative_plotly_from_spec(
 
     if "plotly-declarative" not in spec.allowed_backends:
         raise ValueError(f"{spec.name} does not allow the plotly-declarative backend")
+    if spec.actions or spec.new_state():
+        raise ValueError(
+            f"{spec.name} cannot be rendered with plotly-declarative: "
+            "stateful actions require a live renderer"
+        )
     if len(grid) != 1:
         state_count = math.prod(len(values) for values in grid.values())
         raise ValueError(
@@ -215,32 +329,71 @@ def declarative_plotly_from_spec(
     figures: list[go.Figure] = []
     for value in values:
         parameters = {**defaults, control_name: value}
-        figure = spec.make_figure(**parameters)
+        figure = spec.make_figure(**spec.figure_kwargs(parameters, {}))
         if not isinstance(figure, go.Figure):
-            raise TypeError(
-                "plotly-declarative figure factories must return plotly.go.Figure"
-            )
+            raise TypeError("plotly-declarative figure factories must return plotly.go.Figure")
         figures.append(figure)
 
     trace_count = len(figures[0].data)
     if any(len(figure.data) != trace_count for figure in figures):
-        raise ValueError(
-            "figure factory must return the same trace count for every state"
-        )
+        raise ValueError("figure factory must return the same trace count for every state")
 
     frame_names = [f"{control_name}-{index}" for index in range(len(values))]
+    default_value = controls_by_name[control_name].default
+    active_index = min(
+        range(len(values)),
+        key=lambda index: (
+            abs(float(values[index]) - float(default_value))
+            if isinstance(values[index], (int, float)) and isinstance(default_value, (int, float))
+            else 0 if values[index] == default_value else 1
+        ),
+    )
+    if assume_constant_data:
+        data_is_constant = True
+    else:
+        serialized_data = [go.Figure(data=figure.data).to_json() for figure in figures]
+        data_is_constant = len(set(serialized_data)) == 1
+    layout_json = [figure.layout.to_plotly_json() for figure in figures]
+    layout_keys = set().union(*(layout.keys() for layout in layout_json))
+    dynamic_layout_keys = {
+        key
+        for key in layout_keys
+        if len(
+            {
+                json.dumps(
+                    layout.get(key),
+                    sort_keys=True,
+                    cls=PlotlyJSONEncoder,
+                )
+                for layout in layout_json
+            }
+        )
+        > 1
+    }
+    frame_layouts = [
+        {key: layout.get(key) for key in dynamic_layout_keys} for layout in layout_json
+    ]
     result = go.Figure(
-        data=figures[0].data,
-        layout=figures[0].layout,
+        data=figures[active_index].data,
+        layout=figures[active_index].layout,
         frames=[
-            go.Frame(name=frame_name, data=figure.data, traces=list(range(trace_count)))
-            for frame_name, figure in zip(frame_names, figures)
+            go.Frame(
+                name=frame_name,
+                data=[] if data_is_constant else figure.data,
+                layout=frame_layout,
+                traces=[] if data_is_constant else list(range(trace_count)),
+            )
+            for frame_name, figure, frame_layout in zip(
+                frame_names,
+                figures,
+                frame_layouts,
+            )
         ],
     )
     result.update_layout(
         sliders=[
             {
-                "active": 0,
+                "active": active_index,
                 "currentvalue": {"prefix": f"{controls_by_name[control_name].label}: "},
                 "pad": {"t": 45},
                 "steps": [
@@ -254,11 +407,7 @@ def declarative_plotly_from_spec(
                                 "transition": {"duration": 0},
                             },
                         ],
-                        "label": (
-                            f"{value:g}"
-                            if isinstance(value, (int, float))
-                            else str(value)
-                        ),
+                        "label": (f"{value:g}" if isinstance(value, (int, float)) else str(value)),
                     }
                     for frame_name, value in zip(frame_names, values)
                 ],
@@ -286,13 +435,11 @@ def marimo_app_source(
 
     if "wasm-marimo" not in spec.allowed_backends:
         raise ValueError(f"{spec.name} does not allow the wasm-marimo backend")
-    if PurePosixPath(
-        wheel_filename
-    ).name != wheel_filename or not wheel_filename.endswith(".whl"):
+    if spec.actions or spec.new_state():
+        raise NotImplementedError("the current marimo renderer does not support stateful actions")
+    if PurePosixPath(wheel_filename).name != wheel_filename or not wheel_filename.endswith(".whl"):
         raise ValueError("wheel_filename must be a wheel basename")
-    unsupported = [
-        control.kind for control in spec.controls if control.kind != "slider"
-    ]
+    unsupported = [control.kind for control in spec.controls if control.kind != "slider"]
     if unsupported:
         raise NotImplementedError(
             "the initial marimo renderer supports sliders only; "
@@ -397,6 +544,5 @@ def iter_states(
 
     names = list(grid)
     return [
-        dict(zip(names, values))
-        for values in itertools.product(*(grid[name] for name in names))
+        dict(zip(names, values)) for values in itertools.product(*(grid[name] for name in names))
     ]

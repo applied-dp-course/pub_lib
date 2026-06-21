@@ -1,13 +1,13 @@
 """Statistical visualization utilities."""
 
 import numpy as np
-from IPython.core.display_functions import display
-from ipywidgets import interactive, FloatSlider
-from matplotlib import pyplot as plt
-
 import plotly.graph_objects as go
+from IPython.core.display_functions import display
+from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm
-import ipywidgets as widgets
+
+from .interactive import ControlSpec, InteractiveSpec
+from .interactive_widgets import render_ipywidgets
 
 
 # Used by notebook0
@@ -31,88 +31,121 @@ def plot_histogram(data, title="", x_label="", show_kde=False, bins=50):
     plt.show()
 
 
-def generate_normalized_samples(num_samples, lower_bound, upper_bound, normalization_func):
-    samples = np.random.uniform(lower_bound, upper_bound, size=(num_samples, 10000))
+def generate_normalized_samples(
+    num_samples,
+    lower_bound,
+    upper_bound,
+    normalization_func,
+    *,
+    sample_size=10000,
+    seed=None,
+):
+    rng = np.random.default_rng(seed)
+    samples = rng.uniform(lower_bound, upper_bound, size=(num_samples, sample_size))
     mean = (upper_bound + lower_bound) / 2
     std_dev = np.sqrt(((upper_bound - lower_bound) ** 2) / 12)
     return normalization_func(samples, mean, std_dev)
 
 
-# Create the CLT plot with slider functionality
-# Used by notebook 0
-def plot_CLT_with_sample_slider(normalization_func):
-    lower_bound, upper_bound = -3, 8
-    initial_sample_size = 100
+def make_clt_figure(
+    sample_size,
+    *,
+    normalization_func,
+    lower_bound=-3,
+    upper_bound=8,
+    experiments=10_000,
+    seed=0,
+):
+    """Build one reproducible central-limit-theorem state."""
+
+    sample_size = int(sample_size)
+    if sample_size <= 0:
+        raise ValueError("sample_size must be positive")
+    if experiments < 2:
+        raise ValueError("experiments must be at least 2")
     normalized_samples = generate_normalized_samples(
-        initial_sample_size, lower_bound, upper_bound, normalization_func
+        experiments,
+        lower_bound,
+        upper_bound,
+        normalization_func,
+        sample_size=sample_size,
+        seed=seed,
     )
+    flattened = np.asarray(normalized_samples, dtype=float).reshape(-1)
+    if not np.all(np.isfinite(flattened)):
+        raise ValueError("normalization_func returned non-finite values")
 
-    # Initialize the figure
-    fig = go.Figure()
-
-    # Add initial histogram
-    fig.add_trace(
+    figure = go.Figure()
+    figure.add_trace(
         go.Histogram(
-            x=normalized_samples.flatten(),
+            x=flattened,
             histnorm='probability density',
-            name=f'Mean: {np.mean(normalized_samples):.2f}, Std: {np.std(normalized_samples):.2f}',
+            name=f'Mean: {np.mean(flattened):.2f}, Std: {np.std(flattened):.2f}',
             opacity=0.75,
         )
     )
-
-    # Add initial KDE curve
-    kde = gaussian_kde(normalized_samples.flatten())
+    kde = gaussian_kde(flattened)
     x_kde = np.linspace(
-        min(normalized_samples.flatten()) - 0.001, max(normalized_samples.flatten()) + 0.001, 1000
+        float(np.min(flattened)) - 0.001,
+        float(np.max(flattened)) + 0.001,
+        500,
     )
     y_kde = kde(x_kde)
-
-    fig.add_trace(
+    figure.add_trace(
         go.Scatter(x=x_kde, y=y_kde, mode='lines', line=dict(color='red'), name='KDE Gaussian')
     )
-
-    # Create steps for the slider
-    steps = []
-    for sample_size in range(10, 1001, 50):
-        updated_samples = generate_normalized_samples(
-            sample_size, lower_bound, upper_bound, normalization_func
-        )
-        kde = gaussian_kde(updated_samples.flatten())
-        x_kde = np.linspace(min(updated_samples.flatten()), max(updated_samples.flatten()), 1000)
-        y_kde = kde(x_kde)
-
-        step = dict(
-            method="update",
-            args=[
-                {
-                    'x': [updated_samples.flatten(), x_kde],
-                    'y': [None, y_kde],
-                    'name': [
-                        f'Mean: {updated_samples.mean():.3f}, Std: {updated_samples.std():.3f}',
-                        'KDE Gaussian',
-                    ],
-                }
-            ],
-            label=f'{sample_size}',
-        )
-        steps.append(step)
-
-    # Add slider to the plot
-    sliders = [
-        dict(active=0, currentvalue={"prefix": "Number of Samples: "}, pad={"t": 50}, steps=steps)
-    ]
-
-    # Configure layout
-    fig.update_layout(
-        sliders=sliders,
-        title="Distribution of Sample Means with KDE",
+    figure.update_layout(
+        title=f"Distribution of Normalized Sums (sample size={sample_size})",
         xaxis_title="Sample Mean",
         yaxis_title="Density",
         showlegend=True,
         bargap=0.05,
     )
+    return figure
 
-    fig.show()
+
+def clt_plot_spec(
+    normalization_func,
+    *,
+    lower_bound=-3,
+    upper_bound=8,
+    experiments=10_000,
+    seed=0,
+):
+    return InteractiveSpec(
+        name="central_limit_theorem",
+        artifact_name="central-limit-theorem",
+        controls=(
+            ControlSpec(
+                name="sample_size",
+                kind="slider",
+                label="Sample size",
+                default=100,
+                min=10,
+                max=1000,
+                step=10,
+                continuous=False,
+            ),
+        ),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets",),
+        make_figure=make_clt_figure,
+        figure_factory="libdpy.visualization.statistical_plots:make_clt_figure",
+        fixed_kwargs={
+            "normalization_func": normalization_func,
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "experiments": experiments,
+            "seed": seed,
+        },
+    )
+
+
+# Used by notebook 0
+def plot_CLT_with_sample_slider(normalization_func):
+    rendered = render_ipywidgets(clt_plot_spec(normalization_func))
+    display(rendered.root)
+    return rendered.root
 
 
 def plot_normal_distribution_comparison(
@@ -291,11 +324,71 @@ def plot_laplace_distributions(b, loc1, loc2):
     plt.show()
 
 
-def create_laplace_interactive(loc1=55, loc2=56):
-    interactive_plot = interactive(
-        plot_laplace_distributions,
-        b=FloatSlider(min=0.01, max=4, step=0.01, value=1, description='Scale (b)'),
-        loc1=loc1,
-        loc2=loc2,
+def make_laplace_comparison_figure(
+    scale,
+    *,
+    loc1=55,
+    loc2=56,
+    x_range=(50, 60),
+):
+    """Build two Laplace densities for a concrete scale."""
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    x = np.linspace(x_range[0], x_range[1], 1000)
+    figure = go.Figure(
+        [
+            go.Scatter(
+                x=x,
+                y=1 / (2 * scale) * np.exp(-np.abs(x - loc1) / scale),
+                mode="lines",
+                name="Dist 1",
+                line={"color": "blue"},
+            ),
+            go.Scatter(
+                x=x,
+                y=1 / (2 * scale) * np.exp(-np.abs(x - loc2) / scale),
+                mode="lines",
+                name="Dist 2",
+                line={"color": "red"},
+            ),
+        ]
     )
-    display(interactive_plot)
+    figure.update_layout(
+        title="Laplace Distributions",
+        xaxis_title="x",
+        yaxis_title="Density",
+        yaxis_range=[0, 2],
+        width=600,
+        height=400,
+    )
+    return figure
+
+
+def laplace_comparison_spec(loc1=55, loc2=56):
+    return InteractiveSpec(
+        name="laplace_scale",
+        artifact_name="laplace-scale",
+        controls=(
+            ControlSpec(
+                name="scale",
+                kind="slider",
+                label="Scale (b)",
+                default=1.0,
+                min=0.01,
+                max=4.0,
+                step=0.01,
+            ),
+        ),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets",),
+        make_figure=make_laplace_comparison_figure,
+        figure_factory=("libdpy.visualization.statistical_plots:make_laplace_comparison_figure"),
+        fixed_kwargs={"loc1": loc1, "loc2": loc2},
+    )
+
+
+def create_laplace_interactive(loc1=55, loc2=56):
+    rendered = render_ipywidgets(laplace_comparison_spec(loc1, loc2))
+    display(rendered.root)
+    return rendered.root

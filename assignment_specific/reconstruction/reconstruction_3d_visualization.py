@@ -18,6 +18,8 @@ from libdpy.attacks.reconstruction.geometry import (
 from libdpy.attacks.reconstruction.instances import (
     compare_ols_downside2_estimators,
 )
+from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive_widgets import render_ipywidgets
 
 try:
     import plotly.graph_objects as go
@@ -28,7 +30,7 @@ except ImportError:
     HAS_PLOTLY = False
 
 try:
-    from ipywidgets import Checkbox, Dropdown, FloatSlider, HBox, HTML, Layout, VBox
+    from ipywidgets import HTML, HBox, Layout, VBox
 
     HAS_WIDGETS = True
 except ImportError:
@@ -282,9 +284,7 @@ def _slab_legend_proxies(
                 y=[None],
                 z=[None],
                 mode="markers",
-                marker=dict(
-                    size=11, color=_FEASIBLE_MESH_COLOR, symbol="square", opacity=0.55
-                ),
+                marker=dict(size=11, color=_FEASIBLE_MESH_COLOR, symbol="square", opacity=0.55),
                 name="feasible region",
             )
         )
@@ -340,9 +340,7 @@ def _slab_legend_proxies(
                 y=[None],
                 z=[None],
                 mode="markers",
-                marker=dict(
-                    size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)
-                ),
+                marker=dict(size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)),
                 name="true b",
             )
         )
@@ -394,9 +392,7 @@ def _corner_scatter(
                 y=[highlight[1]],
                 z=[highlight[2]],
                 mode="markers",
-                marker=dict(
-                    size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)
-                ),
+                marker=dict(size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)),
                 name="true b",
                 showlegend=False,
             )
@@ -432,9 +428,7 @@ def _slab_plane_traces(
             lo = float(ri - alpha)
             hi = float(ri + alpha)
             exact_verts = plane_polygon(q, float(ri))
-            exact_outline = _closed_polygon_lines(
-                exact_verts, color, 2.5, "exact constraint"
-            )
+            exact_outline = _closed_polygon_lines(exact_verts, color, 2.5, "exact constraint")
             if exact_outline is not None:
                 traces.append(exact_outline)
             faces = slab_polygons(q, lo, hi)
@@ -442,9 +436,7 @@ def _slab_plane_traces(
                 mesh = _fan_mesh3d(verts, color, 0.18, f"slab {idx + 1} {face_name}")
                 if mesh is not None:
                     traces.append(mesh)
-                outline = _closed_polygon_lines(
-                    verts, color, 1.5, f"slab {idx + 1} {face_name}"
-                )
+                outline = _closed_polygon_lines(verts, color, 1.5, f"slab {idx + 1} {face_name}")
                 if outline is not None:
                     traces.append(outline)
             if exact_verts is not None:
@@ -474,9 +466,7 @@ def _build_3d_cube_only_figure(
                 y=[b_arr[1]],
                 z=[b_arr[2]],
                 mode="markers",
-                marker=dict(
-                    size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)
-                ),
+                marker=dict(size=7, color=_TRUE_B_COLOR, symbol="x", line=dict(width=2)),
                 name="true b",
                 showlegend=True,
             )
@@ -579,21 +569,6 @@ def _build_3d_slab_figure(
     return fig
 
 
-def _replace_figure_widget_contents(widget: Any, fig: "go.Figure") -> None:
-    """Replace a FigureWidget's traces in place, preserving the 3D camera."""
-    camera = None
-    try:
-        camera = widget.layout.scene.camera.to_plotly_json()
-    except Exception:
-        camera = None
-
-    with widget.batch_update():
-        widget.data = []
-        widget.add_traces(list(fig.data))
-        if camera:
-            widget.layout.scene.camera = camera
-
-
 def _prepare_slab_widget_figure(fig: "go.Figure") -> "go.Figure":
     """Compact 3D slab figure for the notebook widget layout."""
     fig.update_layout(
@@ -607,39 +582,107 @@ def _prepare_slab_widget_figure(fig: "go.Figure") -> "go.Figure":
     return fig
 
 
-def interactive_3d_slabs() -> None:
-    """
-    Launch an interactive 3D slab explorer with per-query checkboxes.
-
-    All eight binary subset-count queries in ``{0,1}^3`` are available.
-    The cube is shown immediately; pick queries and ``true b`` to refine.
-    """
-    if not HAS_WIDGETS:
-        print("ipywidgets is not installed; 3D slab widget unavailable.")
-        return
-    if not HAS_PLOTLY:
-        print("plotly is not installed; 3D slab widget unavailable.")
-        return
-
-    from IPython.display import display
+def make_3d_slab_figure(
+    true_b: str,
+    alpha: float,
+    query_0: bool = False,
+    query_1: bool = False,
+    query_2: bool = False,
+    query_3: bool = False,
+    query_4: bool = False,
+    query_5: bool = False,
+    query_6: bool = False,
+    query_7: bool = False,
+) -> "go.Figure":
+    """Build one 3D slab state from named scalar controls."""
 
     Q = cube_corners(3)
-    query_labels = [f"q = ({int(q[0])},{int(q[1])},{int(q[2])})" for q in Q]
-
-    secret_picker = Dropdown(
-        options=[("(choose corner)", "")] + [(k, k) for k in _CORNERS_3D],
-        value="",
-        description="true b",
-        layout=Layout(width="100%"),
-        style={"description_width": "52px"},
+    if not true_b:
+        return _prepare_slab_widget_figure(
+            _build_3d_cube_only_figure(
+                None,
+                show_true_b=False,
+                title="Choose true b before drawing query slabs",
+            )
+        )
+    if true_b not in _CORNERS_3D:
+        raise ValueError(f"unknown cube corner: {true_b!r}")
+    b = np.array(_CORNERS_3D[true_b], dtype=float)
+    active = [
+        index
+        for index, enabled in enumerate(
+            (
+                query_0,
+                query_1,
+                query_2,
+                query_3,
+                query_4,
+                query_5,
+                query_6,
+                query_7,
+            )
+        )
+        if enabled
+    ]
+    return _prepare_slab_widget_figure(
+        _build_3d_slab_figure(
+            b,
+            Q,
+            Q @ b,
+            float(alpha),
+            active_query_indices=active,
+            show_true_b=True,
+        )
     )
 
-    checkboxes: list[Checkbox] = []
+
+def reconstruction_3d_slabs_spec() -> InteractiveSpec:
+    Q = cube_corners(3)
+    return InteractiveSpec(
+        name="reconstruction_3d_slabs",
+        artifact_name="reconstruction-3d-slabs",
+        controls=(
+            ControlSpec(
+                name="true_b",
+                kind="select",
+                label="true b",
+                default="",
+                values=("", *_CORNERS_3D.keys()),
+            ),
+            *(
+                ControlSpec(
+                    name=f"query_{index}",
+                    kind="checkbox",
+                    label=f"q = ({int(q[0])},{int(q[1])},{int(q[2])})",
+                    default=False,
+                )
+                for index, q in enumerate(Q)
+            ),
+            ControlSpec(
+                name="alpha",
+                kind="slider",
+                label="alpha",
+                default=0.2,
+                min=0.0,
+                max=1.0,
+                step=0.05,
+                readout_format=".2f",
+            ),
+        ),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets",),
+        make_figure=make_3d_slab_figure,
+        figure_factory=(
+            "libdpy.assignment_specific.reconstruction."
+            "reconstruction_3d_visualization:make_3d_slab_figure"
+        ),
+    )
+
+
+def _slab_3d_widget_layout(figure, controls, _actions, errors):
     query_rows: list[Any] = []
-    for idx, label in enumerate(query_labels):
-        color = _PLANE_COLORS[idx % len(_PLANE_COLORS)]
-        cb = Checkbox(value=False, description=label, indent=False)
-        checkboxes.append(cb)
+    for index in range(8):
+        color = _PLANE_COLORS[index % len(_PLANE_COLORS)]
         swatch = HTML(
             value=(
                 f'<div style="width:14px;height:14px;background:{color};'
@@ -647,21 +690,11 @@ def interactive_3d_slabs() -> None:
             )
         )
         query_rows.append(
-            HBox([swatch, cb], layout=Layout(align_items="center", grid_gap="8px"))
+            HBox(
+                [swatch, controls[f"query_{index}"]],
+                layout=Layout(align_items="center", grid_gap="8px"),
+            )
         )
-
-    alpha_slider = FloatSlider(
-        min=0.0,
-        max=1.0,
-        step=0.05,
-        value=0.2,
-        description="alpha",
-        readout=True,
-        readout_format=".2f",
-        continuous_update=False,
-        layout=Layout(width="100%"),
-        style={"description_width": "48px"},
-    )
     legend_html = HTML(
         value=(
             "<div style='font-size:12px;line-height:1.45;border:1px solid #adb5bd;"
@@ -681,87 +714,63 @@ def interactive_3d_slabs() -> None:
             f"<span style='display:inline-block;color:{_TRUE_B_COLOR};font-weight:bold;"
             "font-size:14px;margin-right:9px'>×</span>true b"
             "</div>"
-        ),
-        layout=Layout(width="100%"),
+        )
     )
-
     side_controls = VBox(
         [
-            secret_picker,
+            controls["true_b"],
             HTML("<b>Queries</b> (all binary q in {0,1}<sup>3</sup>)"),
             VBox(query_rows),
             HTML("<b>Accuracy bound</b>"),
-            alpha_slider,
+            controls["alpha"],
             legend_html,
+            errors,
         ],
         layout=Layout(
             width="240px",
             min_width="240px",
             max_width="240px",
             flex="0 0 240px",
-            padding="0",
             align_self="flex-start",
         ),
     )
-    state = {"blocked": True}
-
-    def _current_b_and_r() -> tuple[np.ndarray | None, np.ndarray | None, bool]:
-        key = secret_picker.value
-        if key:
-            b = np.array(_CORNERS_3D[key], dtype=float)
-            return b, Q @ b, True
-        return None, None, False
-
-    def _render_figure() -> "go.Figure":
-        b, r, has_b = _current_b_and_r()
-        if not has_b or b is None or r is None:
-            return _prepare_slab_widget_figure(
-                _build_3d_cube_only_figure(
-                    None,
-                    show_true_b=False,
-                    title="Choose true b before drawing query slabs",
-                )
-            )
-        alpha = float(alpha_slider.value)
-        active = [i for i, cb in enumerate(checkboxes) if cb.value]
-        return _prepare_slab_widget_figure(
-            _build_3d_slab_figure(
-                b,
-                Q,
-                r,
-                alpha,
-                active_query_indices=active,
-                show_true_b=has_b,
-            )
-        )
-
-    # FigureWidget updates traces in place: no output accumulation, and it
-    # respects the figure's fixed 440x400 size (no full-width responsive blow-up).
-    figure_widget = go.FigureWidget(_render_figure())
-
-    def _update(*_: Any) -> None:
-        if state["blocked"]:
-            return
-        _replace_figure_widget_contents(figure_widget, _render_figure())
-
     plot_box = VBox(
-        [figure_widget],
+        [figure],
         layout=Layout(
-            border="1px solid #ced4da", padding="2px", align_self="flex-start"
+            border="1px solid #ced4da",
+            padding="2px",
+            align_self="flex-start",
         ),
     )
-
-    for cb in checkboxes:
-        cb.observe(_update, names="value")
-    secret_picker.observe(_update, names="value")
-    alpha_slider.observe(_update, names="value")
-
-    body = HBox(
+    return HBox(
         [plot_box, side_controls],
         layout=Layout(width="710px", align_items="flex-start", grid_gap="16px"),
     )
-    display(body)
-    state["blocked"] = False
+
+
+def interactive_3d_slabs() -> Any:
+    """
+    Launch an interactive 3D slab explorer with per-query checkboxes.
+
+    All eight binary subset-count queries in ``{0,1}^3`` are available.
+    The cube is shown immediately; pick queries and ``true b`` to refine.
+    """
+    if not HAS_WIDGETS:
+        print("ipywidgets is not installed; 3D slab widget unavailable.")
+        return
+    if not HAS_PLOTLY:
+        print("plotly is not installed; 3D slab widget unavailable.")
+        return
+
+    from IPython.display import display
+
+    rendered = render_ipywidgets(
+        reconstruction_3d_slabs_spec(),
+        layout=_slab_3d_widget_layout,
+        preserve_ui_state=True,
+    )
+    display(rendered.root)
+    return rendered.root
 
 
 def _threshold_plane_trace(
@@ -863,7 +872,9 @@ def plot_3d_out_of_cube_example(
     LP_COLOR = "#1f77b4"
     TRUE_COLOR = _TRUE_B_COLOR
     SH_ORIG, SH_PROJ, SH_FINAL, SH_TRUE = "circle", "square", "diamond", "x"
-    lp_orig = (np.asarray(lp_segment[0], dtype=float) + np.asarray(lp_segment[1], dtype=float)) / 2.0
+    lp_orig = (
+        np.asarray(lp_segment[0], dtype=float) + np.asarray(lp_segment[1], dtype=float)
+    ) / 2.0
     lp_final = np.asarray(lp_segment[0], dtype=float)  # LP rounds onto true b=(1,0,0)
 
     fig = make_subplots(
@@ -1206,5 +1217,3 @@ def plot_3d_out_of_cube_example(
         col=2,
     )
     fig.show()
-
-
