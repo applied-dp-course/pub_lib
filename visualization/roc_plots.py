@@ -1,13 +1,13 @@
 import math
 from enum import Enum
 from functools import partial
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import plotly.graph_objects as go
 from IPython.core.display_functions import display
 from plotly.subplots import make_subplots
-from scipy.stats import laplace, norm
+from scipy.stats import cauchy, laplace, logistic, norm, t
 from scipy.stats import rv_continuous as Distribution
 from scipy.stats import uniform
 from sklearn.metrics import auc, roc_curve
@@ -385,13 +385,147 @@ def calc_privacy_bound(log_slope: float, shift: float, res) -> tuple[np.ndarray,
     return x, y
 
 
+# Distributions with a closed-form density: they can draw their theoretical PDFs
+# and exact ROC curve.
+_ANALYTIC_ROC_DISTRIBUTIONS = (
+    "Laplace",
+    "Gaussian",
+    "Student t",
+    "Cauchy",
+    "Logistic",
+)
+# The difference of two i.i.d. lognormals has no elementary PDF/CDF, so it is
+# sampling-only (see make_empirical_roc_figure, which skips its theory traces).
+_LOGNORMAL_DIFFERENCE = "Lognormal difference"
+_EMPIRICAL_ROC_DISTRIBUTIONS = _ANALYTIC_ROC_DISTRIBUTIONS + (_LOGNORMAL_DIFFERENCE,)
+_EMPIRICAL_ROC_STUDENT_T_DF = 3
+_EMPIRICAL_ROC_CAUCHY_MARGIN = 6.0
+
+
 def _empirical_distribution(name: str):
+    """Resolve a display name and its scipy class.
+
+    Returns ``(display_name, distribution_type)`` where ``distribution_type`` is
+    the scipy class for analytic distributions, or ``None`` for sampling-only
+    distributions (the lognormal difference) that have no closed-form density.
+    """
     normalized = name.strip().lower()
     if normalized in {"gaussian", "normal", "norm"}:
         return "Gaussian", norm
     if normalized == "laplace":
         return "Laplace", laplace
-    raise ValueError("distribution must be 'Gaussian' or 'Laplace'")
+    if normalized in {"student t", "student-t", "studentt", "t"}:
+        return "Student t", t
+    if normalized == "cauchy":
+        return "Cauchy", cauchy
+    if normalized == "logistic":
+        return "Logistic", logistic
+    if normalized in {"lognormal difference", "lognormal-difference", "lognormal_difference"}:
+        return _LOGNORMAL_DIFFERENCE, None
+    supported = ", ".join(f"'{name}'" for name in _EMPIRICAL_ROC_DISTRIBUTIONS)
+    raise ValueError(f"distribution must be one of {supported}")
+
+
+def _make_empirical_roc_dist(
+    distribution_type: type[Distribution],
+    loc: float,
+    scale: float,
+) -> Distribution:
+    if distribution_type is t:
+        return t(df=_EMPIRICAL_ROC_STUDENT_T_DF, loc=loc, scale=scale)
+    return distribution_type(loc=loc, scale=scale)
+
+
+def _sample_empirical_roc_dist(
+    distribution_type: type[Distribution],
+    loc: float,
+    scale: float,
+    size: int,
+    random_state: np.random.Generator,
+) -> np.ndarray:
+    if distribution_type is t:
+        return t.rvs(
+            df=_EMPIRICAL_ROC_STUDENT_T_DF,
+            loc=loc,
+            scale=scale,
+            size=size,
+            random_state=random_state,
+        )
+    return distribution_type.rvs(
+        loc=loc,
+        scale=scale,
+        size=size,
+        random_state=random_state,
+    )
+
+
+_EMPIRICAL_ROC_TAIL_PROB = 1e-6
+_EMPIRICAL_ROC_SCALE_MIN = 0.1
+_EMPIRICAL_ROC_SCALE_MAX = 5.0
+
+
+def _frozen_loc_scale(dist: Distribution) -> tuple[float, float]:
+    if dist.kwds:
+        return float(dist.kwds.get("loc", 0.0)), float(dist.kwds.get("scale", 1.0))
+    if len(dist.args) >= 2:
+        return float(dist.args[0]), float(dist.args[1])
+    raise ValueError("distribution must provide loc and scale")
+
+
+def _empirical_roc_pdf_x_range(
+    dist_negative: Distribution,
+    dist_positive: Distribution,
+    *,
+    tail_prob: float = _EMPIRICAL_ROC_TAIL_PROB,
+) -> tuple[float, float]:
+    """Return the PDF panel x-axis bounds from distribution tail quantiles."""
+
+    if not 0 < tail_prob < 0.5:
+        raise ValueError("tail_prob must be between 0 and 0.5")
+    if not np.isfinite(dist_negative.std()) or not np.isfinite(dist_positive.std()):
+        neg_loc, neg_scale = _frozen_loc_scale(dist_negative)
+        pos_loc, pos_scale = _frozen_loc_scale(dist_positive)
+        margin = _EMPIRICAL_ROC_CAUCHY_MARGIN
+        return float(neg_loc - margin * neg_scale), float(pos_loc + margin * pos_scale)
+    return float(dist_negative.ppf(tail_prob)), float(dist_positive.ppf(1 - tail_prob))
+
+
+def _samples_pdf_x_range(
+    samples: np.ndarray,
+    labels: np.ndarray,
+    *,
+    tail_prob: float = 0.02,
+) -> tuple[float, float]:
+    """PDF panel x-axis bounds for sampling-only distributions, from sample quantiles.
+
+    Heavy-tailed sampling-only distributions have no quantile function to query, so
+    the readable range is taken from inner quantiles of the drawn samples.
+    """
+    if not 0 < tail_prob < 0.5:
+        raise ValueError("tail_prob must be between 0 and 0.5")
+    negatives = samples[labels == 0]
+    positives = samples[labels == 1]
+    lower = float(np.quantile(negatives, tail_prob))
+    upper = float(np.quantile(positives, 1 - tail_prob))
+    if not lower < upper:
+        lower, upper = float(np.min(samples)), float(np.max(samples))
+    return lower, upper
+
+
+def _sample_lognormal_difference(
+    loc: float,
+    scale: float,
+    size: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Sample ``loc + (A - B)`` with ``A, B`` i.i.d. ``LogNormal(0, scale)``.
+
+    The difference of two i.i.d. lognormals is symmetric about ``loc`` but has no
+    elementary PDF/CDF -- which is exactly why this distribution is sampling-only.
+    """
+    first = rng.lognormal(mean=0.0, sigma=scale, size=size)
+    second = rng.lognormal(mean=0.0, sigma=scale, size=size)
+    return loc + first - second
 
 
 def _generate_empirical_roc_samples(
@@ -402,80 +536,95 @@ def _generate_empirical_roc_samples(
 ) -> tuple[np.ndarray, np.ndarray]:
     _, distribution_type = _empirical_distribution(distribution)
     rng = np.random.default_rng(seed)
-    negative_samples = distribution_type.rvs(
-        loc=0,
-        scale=scale,
-        size=n_samples,
-        random_state=rng,
-    )
-    positive_samples = distribution_type.rvs(
-        loc=1,
-        scale=scale,
-        size=n_samples,
-        random_state=rng,
-    )
+    if distribution_type is None:
+        negative_samples = _sample_lognormal_difference(0, scale, n_samples, rng)
+        positive_samples = _sample_lognormal_difference(1, scale, n_samples, rng)
+    else:
+        negative_samples = _sample_empirical_roc_dist(
+            distribution_type,
+            loc=0,
+            scale=scale,
+            size=n_samples,
+            random_state=rng,
+        )
+        positive_samples = _sample_empirical_roc_dist(
+            distribution_type,
+            loc=1,
+            scale=scale,
+            size=n_samples,
+            random_state=rng,
+        )
     labels = np.concatenate([np.zeros(n_samples, dtype=int), np.ones(n_samples, dtype=int)])
     return np.concatenate([negative_samples, positive_samples]), labels
 
 
-def make_empirical_roc_figure(
-    distribution: str,
-    scale: float,
-    n_samples: int,
-    sample_seed: int | None = None,
+# --- Modular ROC figure family -------------------------------------------------
+#
+# Rather than one figure builder switching on flags, the explorer is assembled
+# from small panel builders that each add one layer to a shared two-panel canvas
+# (PDF panel on the left, ROC panel on the right). The public factories below
+# compose the layers they need, so the family builds up cleanly:
+#
+#   make_theory_roc_figure      -> theory PDFs + theoretical ROC          (analytic only)
+#   make_empirical_roc_figure   -> the above (when analytic) + sampled
+#                                  histograms + empirical ROC             (any distribution)
+#
+# Trace order is part of the contract (tests and the legend grouping depend on
+# it): negative pdf, positive pdf, theoretical ROC, negative hist, positive hist,
+# empirical ROC, random-classifier diagonal.
+
+_EPSILON_FIGURE_ROC_COLOR = "#00897B"
+_EPSILON_FIGURE_BOUND_COLOR = "#5E35B1"
+_DELTA_MIN = 1e-15
+_DELTA_DEFAULT_THEORY = 1e-6
+_DELTA_DEFAULT_EMPIRICAL = 1e-2
+_ROC_FIGURE_WIDTH = 1000
+_ROC_FIGURE_MARGIN_L = 65
+_ROC_FIGURE_MARGIN_R = 35
+_ROC_SUBPLOT_DOMAINS = ((0.0, 0.46), (0.54, 1.0))
+
+
+def roc_panel_slider_grid_template(
     *,
-    resolution: int = 1000,
-    histogram_bins: int | None = None,
-) -> go.Figure:
-    """Build the Gaussian/Laplace theoretical and empirical ROC explorer."""
+    figure_width: int = _ROC_FIGURE_WIDTH,
+    margin_left: int = _ROC_FIGURE_MARGIN_L,
+    margin_right: int = _ROC_FIGURE_MARGIN_R,
+    subplot_domains: tuple[tuple[float, float], tuple[float, float]] = _ROC_SUBPLOT_DOMAINS,
+) -> str:
+    """Return a CSS grid template aligned with the ROC figure's two subplot panels."""
 
-    if scale <= 0:
-        raise ValueError("scale must be positive")
-    if n_samples <= 0:
-        raise ValueError("n_samples must be positive")
-    if resolution < 2:
-        raise ValueError("resolution must be at least 2")
-    if histogram_bins is not None and histogram_bins <= 0:
-        raise ValueError("histogram_bins must be positive")
-    resolved_histogram_bins = (
-        max(5, int(math.ceil(math.sqrt(n_samples)))) if histogram_bins is None else histogram_bins
-    )
+    plot_width = figure_width - margin_left - margin_right
+    left_width = int(round((subplot_domains[0][1] - subplot_domains[0][0]) * plot_width))
+    gap_width = int(round((subplot_domains[1][0] - subplot_domains[0][1]) * plot_width))
+    right_width = int(round((subplot_domains[1][1] - subplot_domains[1][0]) * plot_width))
+    return f"{margin_left}px {left_width}px {gap_width}px {right_width}px {margin_right}px"
 
-    display_name, distribution_type = _empirical_distribution(distribution)
-    dist_negative = distribution_type(loc=0, scale=scale)
-    dist_positive = distribution_type(loc=1, scale=scale)
-    lower = min(dist_negative.ppf(0.001), dist_positive.ppf(0.001))
-    upper = max(dist_negative.ppf(0.999), dist_positive.ppf(0.999))
-    samples = None
-    labels = None
-    if sample_seed is not None:
-        samples, labels = _generate_empirical_roc_samples(
-            display_name,
-            scale,
-            n_samples,
-            sample_seed,
-        )
-        lower = min(lower, float(np.min(samples)))
-        upper = max(upper, float(np.max(samples)))
 
-    x = np.linspace(lower, upper, resolution)
-    thresholds = np.linspace(lower, upper, resolution)
-    fpr_theoretical = dist_negative.sf(thresholds)
-    tpr_theoretical = dist_positive.sf(thresholds)
-    theoretical_auc = auc(fpr_theoretical, tpr_theoretical)
+def _new_roc_canvas() -> go.Figure:
+    """Return the shared empty two-panel (PDF | ROC) subplot canvas."""
 
-    figure = make_subplots(
+    return make_subplots(
         rows=1,
         cols=2,
         subplot_titles=("Probability Density Functions", "ROC Curves"),
         horizontal_spacing=0.08,
     )
+
+
+def _add_theory_pdf_layer(
+    figure: go.Figure,
+    dist_negative: Distribution,
+    dist_positive: Distribution,
+    x: np.ndarray,
+) -> None:
+    """Add the analytic negative/positive PDF curves to the PDF panel."""
+
     figure.add_trace(
         go.Scatter(
             x=x,
             y=dist_negative.pdf(x),
             mode="lines",
-            name="Negative theory",
+            name="Negative PDF",
             line={"color": "red"},
             legend="legend",
         ),
@@ -487,69 +636,144 @@ def make_empirical_roc_figure(
             x=x,
             y=dist_positive.pdf(x),
             mode="lines",
-            name="Positive theory",
+            name="Positive PDF",
             line={"color": "blue"},
             legend="legend",
         ),
         row=1,
         col=1,
     )
+
+
+def _add_theory_roc_layer(
+    figure: go.Figure,
+    dist_negative: Distribution,
+    dist_positive: Distribution,
+    *,
+    resolution: int,
+    line_color: str = "purple",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Add the optimal (Neyman-Pearson) ROC curve to the ROC panel.
+
+    See :func:`_optimal_roc_curve`: the curve orders outcomes by their likelihood
+    ratio, which is the most powerful test and is correct even when the ratio is not
+    monotone (a one-sided value threshold would be suboptimal there).
+    """
+
+    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
     figure.add_trace(
         go.Scatter(
-            x=fpr_theoretical,
-            y=tpr_theoretical,
+            x=fpr,
+            y=tpr,
             mode="lines",
-            name=f"Theoretical ROC — AUC {theoretical_auc:.3f}",
-            line={"color": "purple"},
+            name=f"Theoretical ROC — AUC {auc(fpr, tpr):.3f}",
+            line={"color": line_color},
             legend="legend2",
         ),
         row=1,
         col=2,
     )
+    return fpr, tpr
 
-    if samples is not None and labels is not None:
-        bin_size = (upper - lower) / resolved_histogram_bins
-        common_bins = {"start": lower, "end": upper, "size": bin_size}
-        figure.add_trace(
-            go.Histogram(
-                x=samples[labels == 0],
-                histnorm="probability density",
-                xbins=common_bins,
-                opacity=0.4,
-                name="Negative samples",
-                marker_color="red",
-                legend="legend",
-            ),
-            row=1,
-            col=1,
-        )
-        figure.add_trace(
-            go.Histogram(
-                x=samples[labels == 1],
-                histnorm="probability density",
-                xbins=common_bins,
-                opacity=0.4,
-                name="Positive samples",
-                marker_color="blue",
-                legend="legend",
-            ),
-            row=1,
-            col=1,
-        )
-        fpr_empirical, tpr_empirical, _ = roc_curve(labels, samples)
-        empirical_auc = auc(fpr_empirical, tpr_empirical)
-        figure.add_trace(
-            go.Scatter(
-                x=fpr_empirical,
-                y=tpr_empirical,
-                mode="lines",
-                name=f"Empirical ROC — AUC {empirical_auc:.3f}",
-                line={"color": "green", "dash": "dash"},
-                legend="legend2",
-            ),
-            row=1,
-            col=2,
-        )
+
+def _add_sample_pdf_layer(
+    figure: go.Figure,
+    samples: np.ndarray,
+    labels: np.ndarray,
+    lower: float,
+    upper: float,
+    histogram_bins: int,
+) -> None:
+    """Add the negative/positive sample histograms to the PDF panel."""
+
+    bin_size = (upper - lower) / histogram_bins
+    common_bins = {"start": lower, "end": upper, "size": bin_size}
+    figure.add_trace(
+        go.Histogram(
+            x=samples[labels == 0],
+            histnorm="probability density",
+            xbins=common_bins,
+            opacity=0.4,
+            name="Negative samples",
+            marker_color="red",
+            legend="legend",
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Histogram(
+            x=samples[labels == 1],
+            histnorm="probability density",
+            xbins=common_bins,
+            opacity=0.4,
+            name="Positive samples",
+            marker_color="blue",
+            legend="legend",
+        ),
+        row=1,
+        col=1,
+    )
+
+
+def _sample_lr_scores(
+    samples: np.ndarray,
+    distribution_type: type[Distribution] | None,
+    scale: float,
+) -> np.ndarray:
+    """Score samples by their log-likelihood ratio -- the optimal test statistic.
+
+    Sorting samples by ``log f_positive - log f_negative`` is the empirical analogue
+    of the Neyman-Pearson ROC, so the empirical curve converges to the optimal
+    theoretical one (rather than to a suboptimal value-threshold curve). Sampling-only
+    distributions have no closed-form density, so they fall back to the raw value.
+    """
+
+    if distribution_type is None:
+        return samples
+    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+    return dist_positive.logpdf(samples) - dist_negative.logpdf(samples)
+
+
+def _empirical_roc_points(
+    labels: np.ndarray,
+    scores: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the full step-function ROC used for privacy-bound calculations."""
+
+    fpr, tpr, _ = roc_curve(labels, scores, drop_intermediate=False)
+    return fpr, tpr
+
+
+def _add_sample_roc_layer(
+    figure: go.Figure,
+    scores: np.ndarray,
+    labels: np.ndarray,
+    *,
+    line_color: str = "green",
+    line_dash: str = "dash",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Add the empirical ROC curve (from sklearn ``roc_curve``) to the ROC panel."""
+
+    fpr, tpr = _empirical_roc_points(labels, scores)
+    figure.add_trace(
+        go.Scatter(
+            x=fpr,
+            y=tpr,
+            mode="lines",
+            name=f"Empirical ROC — AUC {auc(fpr, tpr):.3f}",
+            line={"color": line_color, "dash": line_dash},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+    return fpr, tpr
+
+
+def _add_random_classifier_layer(figure: go.Figure) -> None:
+    """Add the diagonal ``y = x`` reference line to the ROC panel."""
 
     figure.add_trace(
         go.Scatter(
@@ -563,11 +787,22 @@ def make_empirical_roc_figure(
         row=1,
         col=2,
     )
+
+
+def _finalize_roc_canvas(
+    figure: go.Figure,
+    title: str,
+    lower: float,
+    upper: float,
+    *,
+    top_margin: int | None = None,
+) -> go.Figure:
+    """Apply the shared layout, legends, and axis ranges to a populated canvas."""
+
+    resolved_top_margin = top_margin if top_margin is not None else (90 if title else 55)
     figure.update_layout(
-        title=(
-            f"{display_name} distributions: scale={scale:.2f}, " f"samples per class={n_samples}"
-        ),
-        width=1000,
+        title=title,
+        width=_ROC_FIGURE_WIDTH,
         height=580,
         autosize=False,
         barmode="overlay",
@@ -593,34 +828,366 @@ def make_empirical_roc_figure(
             "borderwidth": 1,
             "font": {"size": 11},
         },
-        margin={"t": 90, "b": 70, "l": 65, "r": 35},
+        margin={"t": resolved_top_margin, "b": 70, "l": _ROC_FIGURE_MARGIN_L, "r": _ROC_FIGURE_MARGIN_R},
     )
     figure.update_xaxes(title_text="x", range=[lower, upper], row=1, col=1)
     figure.update_yaxes(title_text="Probability Density", row=1, col=1)
-    figure.update_xaxes(
-        title_text="False Positive Rate",
-        range=[0, 1],
-        row=1,
-        col=2,
-    )
-    figure.update_yaxes(
-        title_text="True Positive Rate",
-        range=[0, 1],
-        row=1,
-        col=2,
-    )
+    figure.update_xaxes(title_text="False Positive Rate", range=[0, 1], row=1, col=2)
+    figure.update_yaxes(title_text="True Positive Rate", range=[0, 1], row=1, col=2)
     return figure
 
 
+def make_theory_roc_figure(
+    distribution: str,
+    scale: float,
+    *,
+    resolution: int = 1000,
+    figure_title: str | None = None,
+) -> go.Figure:
+    """Build the theory-only ROC explorer (PDF curves + exact ROC) for one distribution.
+
+    Only analytic distributions are supported; sampling-only distributions (the
+    lognormal difference) raise, since they have no closed-form density.
+    """
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    if distribution_type is None:
+        raise ValueError(
+            f"{display_name} has no closed-form density; use make_empirical_roc_figure with samples"
+        )
+
+    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+    lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+    grid = np.linspace(lower, upper, resolution)
+
+    figure = _new_roc_canvas()
+    _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
+    _add_theory_roc_layer(figure, dist_negative, dist_positive, resolution=resolution)
+    _add_random_classifier_layer(figure)
+    resolved_title = (
+        figure_title
+        if figure_title is not None
+        else f"{display_name} distributions: scale={scale:.2f}"
+    )
+    return _finalize_roc_canvas(figure, resolved_title, lower, upper)
+
+
+def make_empirical_roc_figure(
+    distribution: str,
+    scale: float,
+    n_samples: int,
+    sample_seed: int | None = None,
+    *,
+    resolution: int = 1000,
+    histogram_bins: int | None = None,
+    compute_epsilon: bool = False,
+    delta: float | None = None,
+) -> go.Figure:
+    """Build the empirical ROC explorer, layering samples on the theory when available.
+
+    Analytic distributions also draw their theoretical PDFs and exact ROC curve.
+    The lognormal difference has no closed form, so it is rendered from samples
+    only and therefore requires ``sample_seed``.
+    """
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if histogram_bins is not None and histogram_bins <= 0:
+        raise ValueError("histogram_bins must be positive")
+    resolved_delta = _DELTA_DEFAULT_EMPIRICAL if delta is None else delta
+    if compute_epsilon and not _DELTA_MIN <= resolved_delta <= 1:
+        raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+    resolved_histogram_bins = (
+        max(5, int(math.ceil(math.sqrt(n_samples)))) if histogram_bins is None else histogram_bins
+    )
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    has_theory = distribution_type is not None
+
+    samples = None
+    labels = None
+    if sample_seed is not None:
+        samples, labels = _generate_empirical_roc_samples(
+            display_name,
+            scale,
+            n_samples,
+            sample_seed,
+        )
+
+    if not has_theory and samples is None:
+        raise ValueError(
+            f"{display_name} has no closed-form density; pass sample_seed to draw it from samples"
+        )
+
+    if has_theory:
+        dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+        dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+        lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+    else:
+        lower, upper = _samples_pdf_x_range(samples, labels)
+
+    figure = _new_roc_canvas()
+    fpr = tpr = None
+    if has_theory:
+        grid = np.linspace(lower, upper, resolution)
+        _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
+        _add_theory_roc_layer(figure, dist_negative, dist_positive, resolution=resolution)
+    if samples is not None and labels is not None:
+        _add_sample_pdf_layer(figure, samples, labels, lower, upper, resolved_histogram_bins)
+        scores = _sample_lr_scores(samples, distribution_type, scale)
+        fpr, tpr = _add_sample_roc_layer(figure, scores, labels)
+    _add_random_classifier_layer(figure)
+
+    title = f"{display_name} distributions: scale={scale:.2f}"
+    if sample_seed is not None:
+        title = f"{title}, samples per class={n_samples}"
+    if compute_epsilon and fpr is not None and tpr is not None:
+        epsilon = compute_epsilon_for_delta(fpr, tpr, resolved_delta)
+        log_slope = epsilon if np.isfinite(epsilon) else float("inf")
+        if np.isfinite(log_slope):
+            _add_privacy_bound_layer(
+                figure,
+                log_slope,
+                resolved_delta,
+                resolution=resolution,
+                line_color=_EPSILON_FIGURE_BOUND_COLOR,
+            )
+        epsilon_text = _format_epsilon_for_title(epsilon)
+        title = (
+            f"{display_name}: ε = {epsilon_text} at "
+            f"δ = {_format_delta_scientific(resolved_delta)}, scale = {scale:.2g}, "
+            f"samples per class = {n_samples}"
+        )
+    return _finalize_roc_canvas(figure, title, lower, upper)
+
+
+def _format_scale_readout(scale: float) -> str:
+    return f"{scale:.3g}"
+
+
+def _scale_control_spec(scale: float) -> ControlSpec:
+    return ControlSpec(
+        name="scale",
+        kind="slider",
+        label="scale",
+        default=scale,
+        min=_EMPIRICAL_ROC_SCALE_MIN,
+        max=max(_EMPIRICAL_ROC_SCALE_MAX, scale),
+        step=0.05,
+        continuous=True,
+        slider_scale="log",
+        readout_formatter=_format_scale_readout,
+    )
+
+
+def _n_samples_control_spec(n_samples: int) -> ControlSpec:
+    return ControlSpec(
+        name="n_samples",
+        kind="slider",
+        label="Samples / class",
+        default=n_samples,
+        min=10,
+        max=max(5000, n_samples),
+        step=0.05,
+        continuous=True,
+        slider_scale="log",
+    )
+
+
+def _distribution_control_spec(distribution: str, values: tuple[str, ...]) -> ControlSpec:
+    return ControlSpec(
+        name="distribution",
+        kind="select",
+        label="Distribution",
+        default=distribution,
+        values=values,
+    )
+
+
+def _theory_roc_control_specs(
+    scale: float,
+    distribution: str,
+) -> tuple[ControlSpec, ControlSpec]:
+    # Only analytic distributions can draw a theoretical curve, so the theory
+    # explorer's selector excludes the sampling-only lognormal difference.
+    return (
+        _distribution_control_spec(distribution, _ANALYTIC_ROC_DISTRIBUTIONS),
+        _scale_control_spec(scale),
+    )
+
+
+def _empirical_roc_control_specs(
+    n_samples: int,
+    scale: float,
+    distribution: str,
+) -> tuple[ControlSpec, ControlSpec, ControlSpec]:
+    return (
+        _distribution_control_spec(distribution, _EMPIRICAL_ROC_DISTRIBUTIONS),
+        _scale_control_spec(scale),
+        _n_samples_control_spec(n_samples),
+    )
+
+
+def _compute_epsilon_control_spec(*, default: bool = False) -> ControlSpec:
+    return ControlSpec(
+        name="compute_epsilon",
+        kind="toggle_button",
+        label="Compute ε",
+        default=default,
+        description="Compute the tightest (ε, δ)-DP guarantee for the current ROC",
+    )
+
+
+def _theory_roc_interactive_controls(
+    scale: float,
+    distribution: str,
+    *,
+    delta: float,
+    compute_epsilon: bool,
+    show_compute_epsilon_toggle: bool,
+    selectable_distribution: bool,
+) -> tuple[ControlSpec, ...]:
+    controls: list[ControlSpec] = []
+    if selectable_distribution:
+        controls.extend(_theory_roc_control_specs(scale, distribution))
+    else:
+        controls.append(_scale_control_spec(scale))
+    if show_compute_epsilon_toggle:
+        controls.append(_compute_epsilon_control_spec(default=compute_epsilon))
+    controls.append(_delta_control_spec(delta))
+    return tuple(controls)
+
+
+def _empirical_roc_interactive_controls(
+    n_samples: int,
+    scale: float,
+    distribution: str,
+    *,
+    delta: float,
+    compute_epsilon: bool,
+    show_compute_epsilon_toggle: bool,
+    selectable_distribution: bool,
+) -> tuple[ControlSpec, ...]:
+    controls: list[ControlSpec] = []
+    if selectable_distribution:
+        controls.extend(_empirical_roc_control_specs(n_samples, scale, distribution))
+    else:
+        controls.extend((_scale_control_spec(scale), _n_samples_control_spec(n_samples)))
+    if show_compute_epsilon_toggle:
+        controls.append(_compute_epsilon_control_spec(default=compute_epsilon))
+    controls.append(_delta_control_spec(delta))
+    return tuple(controls)
+
+
+def _roc_visualizer_layout(
+    *,
+    distribution_name: str,
+    selectable_distribution: bool,
+    show_compute_epsilon_toggle: bool,
+    below_left_footer: tuple[str, ...] = (),
+    below_right_footer_actions: tuple[str, ...] = (),
+):
+    from .interactive_widgets import roc_subplot_control_layout
+
+    def _selected_distribution(controls: Mapping[str, Any]) -> str:
+        if "distribution" in controls:
+            return str(controls["distribution"].value)
+        return distribution_name
+
+    def scale_readout(controls: Mapping[str, Any]) -> str:
+        return f"Scale = {_format_scale_readout(float(controls['scale'].value))}"
+
+    def privacy_readout(controls: Mapping[str, Any]) -> str:
+        return _theory_privacy_dp_label(
+            _selected_distribution(controls),
+            float(controls["scale"].value),
+            float(controls["delta"].value),
+        )
+
+    return roc_subplot_control_layout(
+        scale_readout=scale_readout,
+        privacy_readout=privacy_readout,
+        compute_epsilon_control="compute_epsilon" if show_compute_epsilon_toggle else None,
+        below_left=("scale",),
+        below_right=("delta",),
+        below_left_footer=below_left_footer,
+        below_right_footer_actions=below_right_footer_actions,
+        toolbar=("distribution",) if selectable_distribution else (),
+        centered_title=distribution_name,
+        centered_title_control="distribution" if selectable_distribution else None,
+        figure_width=_ROC_FIGURE_WIDTH,
+        slider_grid_template=roc_panel_slider_grid_template(),
+    )
+
+
+def _make_theory_roc_interactive_figure(
+    distribution: str,
+    scale: float,
+    *,
+    compute_epsilon: bool = False,
+    delta: float = _DELTA_DEFAULT_THEORY,
+    resolution: int = 1000,
+) -> go.Figure:
+    if compute_epsilon:
+        return make_epsilon_from_delta_figure(
+            distribution,
+            scale,
+            delta,
+            resolution=resolution,
+            figure_title="",
+        )
+    return make_theory_roc_figure(
+        distribution,
+        scale,
+        resolution=resolution,
+        figure_title="",
+    )
+
+
+def _make_empirical_roc_interactive_figure(
+    distribution: str,
+    scale: float,
+    n_samples: int,
+    sample_seed: int | None = None,
+    *,
+    compute_epsilon: bool = False,
+    delta: float = _DELTA_DEFAULT_EMPIRICAL,
+    resolution: int = 1000,
+) -> go.Figure:
+    return make_empirical_roc_figure(
+        distribution,
+        scale,
+        n_samples,
+        sample_seed,
+        resolution=resolution,
+        compute_epsilon=compute_epsilon,
+        delta=delta,
+    )
+
+
 class EmpROCVisualizer(AbstractInteractivePlot):
-    """Gaussian/Laplace ROC explorer backed by the generic interactive engine."""
+    """ROC explorer backed by the generic interactive engine."""
 
     def __init__(
         self,
         n_samples: int,
         distribution: str = "Laplace",
         scale: float = 1.0,
+        delta: float = _DELTA_DEFAULT_EMPIRICAL,
         *,
+        compute_epsilon: bool = False,
+        show_compute_epsilon_toggle: bool = True,
+        selectable_distribution: bool = True,
         random_seed: int | None = None,
         auto_display: bool = True,
     ):
@@ -628,17 +1195,27 @@ class EmpROCVisualizer(AbstractInteractivePlot):
             raise ValueError("n_samples must be positive")
         if scale <= 0:
             raise ValueError("scale must be positive")
+        if not _DELTA_MIN <= delta <= 1:
+            raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
 
         self.n_samples = int(n_samples)
         self.distribution = _empirical_distribution(distribution)[0]
         self.scale = float(scale)
+        self.delta = float(delta)
+        self.compute_epsilon = bool(compute_epsilon or not show_compute_epsilon_toggle)
+        self.show_compute_epsilon_toggle = bool(show_compute_epsilon_toggle)
+        self.selectable_distribution = bool(selectable_distribution)
         self._seed_generator = np.random.default_rng(random_seed)
+        self._initial_sample_seed = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
         self._rendered = self.widget()
 
         # Preserve the useful public attributes from the original implementation.
-        self.distribution_control = self._rendered.controls["distribution"]
+        # When the distribution is fixed there is no selector control to expose.
+        self.distribution_control = self._rendered.controls.get("distribution")
         self.scale_slider = self._rendered.controls["scale"]
         self.sample_count_slider = self._rendered.controls["n_samples"]
+        self.compute_epsilon_toggle = self._rendered.controls.get("compute_epsilon")
+        self.delta_slider = self._rendered.controls["delta"]
         self.sample_button = self._rendered.actions["generate_samples"]
         self.interactive_plot = self._rendered.root
 
@@ -649,48 +1226,51 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
         return None
 
+    def widget(self, **renderer_options):
+        from .interactive_widgets import render_ipywidgets
+
+        return render_ipywidgets(
+            self.build_spec(),
+            layout=_roc_visualizer_layout(
+                distribution_name=self.distribution,
+                selectable_distribution=self.selectable_distribution,
+                show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
+                below_left_footer=("n_samples",),
+                below_right_footer_actions=("generate_samples",),
+            ),
+            **renderer_options,
+        )
+
     def spec(self) -> InteractiveSpec:
+        controls = _empirical_roc_interactive_controls(
+            self.n_samples,
+            self.scale,
+            self.distribution,
+            delta=self.delta,
+            compute_epsilon=self.compute_epsilon,
+            show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
+            selectable_distribution=self.selectable_distribution,
+        )
+        fixed_kwargs: dict[str, object] = {}
+        if not self.selectable_distribution:
+            fixed_kwargs = {"distribution": self.distribution}
+        if not self.show_compute_epsilon_toggle:
+            fixed_kwargs["compute_epsilon"] = True
         return InteractiveSpec(
             name="empirical_roc_visualizer",
             artifact_name="empirical-roc-visualizer",
-            controls=(
-                ControlSpec(
-                    name="distribution",
-                    kind="select",
-                    label="Distribution",
-                    default=self.distribution,
-                    values=("Laplace", "Gaussian"),
-                ),
-                ControlSpec(
-                    name="scale",
-                    kind="slider",
-                    label="Scale",
-                    default=self.scale,
-                    min=0.1,
-                    max=2.0,
-                    step=0.1,
-                    continuous=True,
-                ),
-                ControlSpec(
-                    name="n_samples",
-                    kind="slider",
-                    label="Samples / class",
-                    default=self.n_samples,
-                    min=10,
-                    max=max(5000, self.n_samples),
-                    step=0.05,
-                    continuous=True,
-                    slider_scale="log",
-                ),
-            ),
+            controls=controls,
             preferred_backend="ipywidgets",
             allowed_backends=("ipywidgets",),
+            fixed_kwargs=fixed_kwargs,
             make_figure=partial(
-                make_empirical_roc_figure,
+                _make_empirical_roc_interactive_figure,
                 resolution=1000,
             ),
-            figure_factory=("libdpy.visualization.roc_plots:make_empirical_roc_figure"),
-            description=("Gaussian/Laplace theoretical and empirical ROC explorer."),
+            figure_factory=(
+                "libdpy.visualization.roc_plots:_make_empirical_roc_interactive_figure"
+            ),
+            description=("Theoretical and empirical ROC explorer for common distributions."),
             actions=(
                 ActionSpec(
                     name="generate_samples",
@@ -699,7 +1279,7 @@ class EmpROCVisualizer(AbstractInteractivePlot):
                     button_style="info",
                 ),
             ),
-            initial_state={"sample_seed": None},
+            initial_state={"sample_seed": self._initial_sample_seed},
         )
 
     @property
@@ -707,8 +1287,13 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         sample_seed = self._rendered.state["sample_seed"]
         if sample_seed is None:
             return None
+        distribution = (
+            self.distribution_control.value
+            if self.distribution_control is not None
+            else self.distribution
+        )
         return _generate_empirical_roc_samples(
-            self.distribution_control.value,
+            distribution,
             self.scale_slider.value,
             int(round(self.sample_count_slider.value)),
             sample_seed,
@@ -747,14 +1332,25 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         scale: float,
         distribution: str | None = None,
         n_samples: int | None = None,
+        *,
+        compute_epsilon: bool | None = None,
+        delta: float | None = None,
     ) -> go.Figure:
         """Return the current state as a Plotly figure."""
 
-        return make_empirical_roc_figure(
+        resolved_compute_epsilon = (
+            self.compute_epsilon
+            if compute_epsilon is None
+            else compute_epsilon
+        )
+        resolved_delta = self.delta if delta is None else delta
+        return _make_empirical_roc_interactive_figure(
             distribution or self.distribution,
             scale,
             n_samples or self.n_samples,
             self._rendered.state["sample_seed"],
+            compute_epsilon=resolved_compute_epsilon,
+            delta=resolved_delta,
         )
 
     def show(self):
@@ -762,3 +1358,661 @@ class EmpROCVisualizer(AbstractInteractivePlot):
 
         display(self._rendered.root)
         return self._rendered.root
+
+
+_ROC_RATE_EPS = 1e-12
+
+
+def _optimal_roc_curve(
+    dist_negative: Distribution,
+    dist_positive: Distribution,
+    *,
+    resolution: int = 1000,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the optimal (Neyman-Pearson) ROC for an arbitrary distribution pair.
+
+    The most powerful test at every level rejects where the likelihood ratio
+    ``f_positive / f_negative`` is largest. Sweeping a threshold ``t`` down through that
+    ratio and accumulating the mass of every cell with ratio ``>= t`` is the same as
+    ordering cells by descending log-likelihood ratio and taking cumulative sums -- so
+    that is what we do. A one-sided value threshold is optimal only when the ratio is
+    monotone (Laplace, Gaussian, Logistic); for non-monotone-LR pairs (Student-t,
+    Cauchy) the optimal rejection region is an interval, so a value threshold
+    understates the achievable TPR -- and hence the privacy loss.
+
+    The curve is concave by construction: the slope of the segment a cell contributes
+    is exactly that cell's likelihood ratio, so descending-ratio order yields
+    non-increasing slopes.
+    """
+
+    # Quantile-spaced edges of both distributions: dense in the tails (so the ROC
+    # reaches very small FPR, needed for tiny delta) and around the medians.
+    tail = np.logspace(-15, math.log10(0.5), max(2, resolution))
+    probs = np.unique(np.concatenate([tail, 1.0 - tail]))
+    edges = np.unique(
+        np.concatenate([dist_negative.ppf(probs), dist_positive.ppf(probs)])
+    )
+    edges = edges[np.isfinite(edges)]
+    midpoints = 0.5 * (edges[:-1] + edges[1:])
+    widths = np.diff(edges)
+
+    log_neg = dist_negative.logpdf(midpoints)
+    log_pos = dist_positive.logpdf(midpoints)
+    mass_negative = np.exp(log_neg) * widths
+    mass_positive = np.exp(log_pos) * widths
+    mass_negative /= mass_negative.sum()
+    mass_positive /= mass_positive.sum()
+
+    # Prepend the origin only; the normalized cumulative sums already end at (1, 1)
+    # (appending an exact 1.0 could fall below the last cumulative value and break
+    # the monotonicity that ``sklearn.metrics.auc`` requires).
+    order = np.argsort(-(log_pos - log_neg))
+    fpr = np.concatenate([[0.0], np.cumsum(mass_negative[order])])
+    tpr = np.concatenate([[0.0], np.cumsum(mass_positive[order])])
+    return fpr, tpr
+
+
+def _likelihood_ratio_unbounded(
+    dist_negative: Distribution,
+    dist_positive: Distribution,
+) -> bool:
+    """Whether the likelihood ratio is unbounded (so epsilon at ``delta = 0`` is infinite).
+
+    Probe two successively deeper tail quantiles: if the log-likelihood ratio is still
+    growing at the deeper point, the ratio diverges in that tail (e.g. Gaussian, whose
+    ratio is ``exp`` of a line); if it plateaus (Laplace, Logistic) or decays (Cauchy,
+    Student-t) the ratio is bounded and the tightest epsilon is finite.
+    """
+
+    depths = np.array([1e-12, 1e-15])
+    right_x = dist_negative.isf(depths)
+    left_x = dist_negative.ppf(depths)
+    right_llr = dist_positive.logpdf(right_x) - dist_negative.logpdf(right_x)
+    left_llr = dist_negative.logpdf(left_x) - dist_positive.logpdf(left_x)
+    return bool(right_llr[1] > right_llr[0] + 1e-6 or left_llr[1] > left_llr[0] + 1e-6)
+
+
+def _roc_slope_supremum_unbounded(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> bool:
+    """Return whether the required slope keeps increasing as FPR approaches zero."""
+
+    positive = fpr > _ROC_RATE_EPS
+    if np.count_nonzero(positive) < 2:
+        return False
+
+    order = np.argsort(fpr[positive])
+    smallest_fpr = fpr[positive][order]
+    tpr_slopes = (tpr[positive][order] - delta) / smallest_fpr
+    if tpr_slopes[0] <= _ROC_RATE_EPS or tpr_slopes[1] <= _ROC_RATE_EPS:
+        return False
+    return bool(tpr_slopes[0] > tpr_slopes[1] * (1.0 + 1e-4))
+
+
+def _roc_inverse_slope_supremum_unbounded(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> bool:
+    """Return whether ``(FPR - delta) / TPR`` keeps increasing as TPR approaches zero."""
+
+    positive = tpr > _ROC_RATE_EPS
+    if np.count_nonzero(positive) < 2:
+        return False
+
+    order = np.argsort(tpr[positive])
+    smallest_tpr = tpr[positive][order]
+    fpr_slopes = (fpr[positive][order] - delta) / smallest_tpr
+    if fpr_slopes[0] <= _ROC_RATE_EPS or fpr_slopes[1] <= _ROC_RATE_EPS:
+        return False
+    return bool(fpr_slopes[0] > fpr_slopes[1] * (1.0 + 1e-4))
+
+
+def _roc_origin_constraints_violated(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> bool:
+    """Return whether either axis intercept violates the ``(epsilon, delta)`` strip."""
+
+    zero_fpr = fpr <= _ROC_RATE_EPS
+    if np.any(zero_fpr) and np.max(tpr[zero_fpr]) > delta + _ROC_RATE_EPS:
+        return True
+    zero_tpr = tpr <= _ROC_RATE_EPS
+    return bool(np.any(zero_tpr) and np.max(fpr[zero_tpr]) > delta + _ROC_RATE_EPS)
+
+
+def _roc_step_min_slope(fpr: np.ndarray, tpr: np.ndarray, delta: float) -> float:
+    """Return the smallest ``m = e^epsilon`` satisfying both DP inequalities on a step ROC."""
+
+    min_slope = 0.0
+    positive_fpr = fpr > _ROC_RATE_EPS
+    positive_tpr = tpr > _ROC_RATE_EPS
+
+    if np.any(positive_fpr):
+        min_slope = max(
+            min_slope,
+            float(np.max((tpr[positive_fpr] - delta) / fpr[positive_fpr])),
+        )
+    if np.any(positive_tpr):
+        min_slope = max(
+            min_slope,
+            float(np.max((fpr[positive_tpr] - delta) / tpr[positive_tpr])),
+        )
+
+    for index in range(1, len(fpr)):
+        f0, t0 = float(fpr[index - 1]), float(tpr[index - 1])
+        f1, t1 = float(fpr[index]), float(tpr[index])
+        if f1 > f0 + _ROC_RATE_EPS and t0 > _ROC_RATE_EPS:
+            min_slope = max(min_slope, (f1 - delta) / t0)
+        if t1 > t0 + _ROC_RATE_EPS and f1 > _ROC_RATE_EPS:
+            min_slope = max(min_slope, (t1 - delta) / f1)
+
+    return min_slope
+
+
+def compute_min_log_slope_for_roc(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> float:
+    """Return ``ln(m)`` for the smallest slope ``m`` that upper bounds the ROC at ``delta``."""
+
+    if not 0 <= delta <= 1:
+        raise ValueError("delta must be between 0 and 1")
+
+    fpr = np.asarray(fpr, dtype=float)
+    tpr = np.asarray(tpr, dtype=float)
+    if fpr.shape != tpr.shape:
+        raise ValueError("fpr and tpr must have the same shape")
+    if len(fpr) == 0:
+        raise ValueError("fpr and tpr must not be empty")
+
+    if _roc_origin_constraints_violated(fpr, tpr, delta):
+        return float("inf")
+    if _roc_slope_supremum_unbounded(fpr, tpr, delta):
+        return float("inf")
+    if _roc_inverse_slope_supremum_unbounded(fpr, tpr, delta):
+        return float("inf")
+
+    min_slope = _roc_step_min_slope(fpr, tpr, delta)
+    if min_slope <= _ROC_RATE_EPS:
+        return 0.0
+    return float(np.log(min_slope))
+
+
+def compute_epsilon_for_delta(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> float:
+    """Return the minimum ``epsilon`` such that the ROC is ``(epsilon, delta)``-DP.
+
+    This is exact for the step ROCs produced by sampling (sklearn ``roc_curve``);
+    for the smooth, concave optimal ROC use :func:`optimal_roc_epsilon_for_delta`.
+    """
+
+    log_slope = compute_min_log_slope_for_roc(fpr, tpr, delta)
+    if not np.isfinite(log_slope):
+        return float("inf")
+    return max(0.0, log_slope)
+
+
+def optimal_roc_epsilon_for_delta(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+    *,
+    lr_unbounded: bool,
+) -> float:
+    """Return the minimum ``epsilon`` for which a *concave* ROC is ``(epsilon, delta)``-DP.
+
+    The optimal ROC (:func:`_optimal_roc_curve`) is concave, so the tightest slope is
+    attained at one of its points and both DP inequalities reduce to chord slopes from
+    the ``delta`` offsets -- no step-corner terms (which would fabricate operating
+    points below a smooth curve).
+
+    Epsilon is infinite only at ``delta = 0`` with an unbounded likelihood ratio: then
+    the curve rises vertically out of the origin and no finite slope bounds it. For any
+    ``delta > 0`` the slack clears that vertical start, so the chord slope (read off the
+    deep-tail quantile grid) is finite and correct. ``lr_unbounded`` is supplied by the
+    caller via :func:`_likelihood_ratio_unbounded` -- it cannot be read off a finite
+    grid, on which the largest slope is always finite.
+    """
+
+    if not 0 <= delta <= 1:
+        raise ValueError("delta must be between 0 and 1")
+    fpr = np.asarray(fpr, dtype=float)
+    tpr = np.asarray(tpr, dtype=float)
+    if fpr.shape != tpr.shape:
+        raise ValueError("fpr and tpr must have the same shape")
+    if len(fpr) == 0:
+        raise ValueError("fpr and tpr must not be empty")
+
+    if delta <= 0 and lr_unbounded:
+        return float("inf")
+
+    slope = 0.0
+    positive_fpr = fpr > _ROC_RATE_EPS
+    positive_tpr = tpr > _ROC_RATE_EPS
+    if np.any(positive_fpr):
+        slope = max(slope, float(np.max((tpr[positive_fpr] - delta) / fpr[positive_fpr])))
+    if np.any(positive_tpr):
+        slope = max(slope, float(np.max((fpr[positive_tpr] - delta) / tpr[positive_tpr])))
+    if slope <= _ROC_RATE_EPS:
+        return 0.0
+    return max(0.0, float(np.log(slope)))
+
+
+def _format_epsilon_for_title(epsilon: float) -> str:
+    if not np.isfinite(epsilon):
+        return "∞"
+    if epsilon <= _ROC_RATE_EPS:
+        return "0"
+    return f"{epsilon:.3g}"
+
+
+def _format_privacy_dp_label(epsilon: float, delta: float) -> str:
+    """Return a compact ``(epsilon, delta)-DP`` label for widget readouts."""
+
+    return f"({_format_epsilon_for_title(epsilon)}, {_format_delta_scientific(delta)})-DP"
+
+
+def _theory_privacy_dp_label(
+    distribution: str,
+    scale: float,
+    delta: float,
+    *,
+    resolution: int = 1000,
+) -> str:
+    """Compute the ``(epsilon, delta)-DP`` label for an analytic distribution pair."""
+
+    _, distribution_type = _empirical_distribution(distribution)
+    if distribution_type is None:
+        raise ValueError(f"{distribution} has no closed-form density")
+
+    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
+    epsilon = optimal_roc_epsilon_for_delta(
+        fpr,
+        tpr,
+        delta,
+        lr_unbounded=_likelihood_ratio_unbounded(dist_negative, dist_positive),
+    )
+    return _format_privacy_dp_label(epsilon, delta)
+
+
+def _format_delta_scientific(delta: float) -> str:
+    """Format ``delta`` as a power of ten, e.g. ``10^-6``."""
+
+    if delta <= 0:
+        return "0"
+    if abs(delta - 1.0) < _ROC_RATE_EPS:
+        return "1"
+
+    log10 = math.log10(delta)
+    if abs(log10 - round(log10)) < max(1e-9, abs(log10) * 1e-9):
+        exponent = int(round(log10))
+        if exponent == 0:
+            return "1"
+        return f"10^{exponent}"
+    return f"10^{log10:.2g}"
+
+
+def _delta_control_spec(delta: float = _DELTA_DEFAULT_THEORY) -> ControlSpec:
+    return ControlSpec(
+        name="delta",
+        kind="slider",
+        label="δ",
+        default=delta,
+        min=_DELTA_MIN,
+        max=1.0,
+        step=0.05,
+        continuous=True,
+        slider_scale="log",
+        readout_formatter=_format_delta_scientific,
+    )
+
+
+def _add_privacy_bound_layer(
+    figure: go.Figure,
+    log_slope: float,
+    delta: float,
+    *,
+    resolution: int,
+    line_color: str = "blue",
+) -> None:
+    bound_x, bound_y = calc_privacy_bound(log_slope, delta, resolution)
+    figure.add_trace(
+        go.Scatter(
+            x=bound_x,
+            y=bound_y,
+            mode="lines",
+            name="(ε, δ) bound",
+            line={"color": line_color, "width": 3},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+
+
+def make_epsilon_from_delta_figure(
+    distribution: str,
+    scale: float,
+    delta: float,
+    *,
+    resolution: int = 1000,
+    figure_title: str | None = None,
+) -> go.Figure:
+    """Build the ROC explorer that computes the tightest ``epsilon`` for a fixed ``delta``."""
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if not 0 <= delta <= 1:
+        raise ValueError("delta must be between 0 and 1")
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    if distribution_type is None:
+        raise ValueError(
+            f"{display_name} has no closed-form density; use the empirical ROC explorer instead"
+        )
+
+    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+    lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+    grid = np.linspace(lower, upper, resolution)
+
+    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
+    epsilon = optimal_roc_epsilon_for_delta(
+        fpr,
+        tpr,
+        delta,
+        lr_unbounded=_likelihood_ratio_unbounded(dist_negative, dist_positive),
+    )
+    log_slope = epsilon if np.isfinite(epsilon) else float("inf")
+
+    figure = _new_roc_canvas()
+    _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
+    # Draw the same optimal (Neyman-Pearson) ROC that the epsilon/bound are computed
+    # from, so the bound stays tangent to the curve. For non-monotone-LR pairs
+    # (Cauchy, Student-t) this lies strictly above a one-sided value-threshold ROC.
+    figure.add_trace(
+        go.Scatter(
+            x=fpr,
+            y=tpr,
+            mode="lines",
+            name=f"Theoretical ROC — AUC {auc(fpr, tpr):.3f}",
+            line={"color": _EPSILON_FIGURE_ROC_COLOR},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+    if np.isfinite(log_slope):
+        _add_privacy_bound_layer(
+            figure,
+            log_slope,
+            delta,
+            resolution=resolution,
+            line_color=_EPSILON_FIGURE_BOUND_COLOR,
+        )
+    _add_random_classifier_layer(figure)
+
+    resolved_title = (
+        figure_title
+        if figure_title is not None
+        else f"{display_name} distributions: scale={scale:.2g}"
+    )
+    return _finalize_roc_canvas(figure, resolved_title, lower, upper)
+
+
+def make_empirical_epsilon_from_delta_figure(
+    distribution: str,
+    scale: float,
+    delta: float,
+    n_samples: int,
+    sample_seed: int | None = None,
+    *,
+    resolution: int = 1000,
+    histogram_bins: int | None = None,
+) -> go.Figure:
+    """Build the sampled ROC explorer that computes ``epsilon`` from an empirical ROC."""
+
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if not _DELTA_MIN <= delta <= 1:
+        raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+    if histogram_bins is not None and histogram_bins <= 0:
+        raise ValueError("histogram_bins must be positive")
+    if sample_seed is None:
+        raise ValueError("sample_seed is required to draw an empirical ROC")
+
+    resolved_histogram_bins = (
+        max(5, int(math.ceil(math.sqrt(n_samples)))) if histogram_bins is None else histogram_bins
+    )
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    samples, labels = _generate_empirical_roc_samples(
+        display_name,
+        scale,
+        n_samples,
+        sample_seed,
+    )
+
+    if distribution_type is not None:
+        dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+        dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+        lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+    else:
+        lower, upper = _samples_pdf_x_range(samples, labels)
+
+    figure = _new_roc_canvas()
+    _add_sample_pdf_layer(figure, samples, labels, lower, upper, resolved_histogram_bins)
+    scores = _sample_lr_scores(samples, distribution_type, scale)
+    fpr, tpr = _empirical_roc_points(labels, scores)
+    figure.add_trace(
+        go.Scatter(
+            x=fpr,
+            y=tpr,
+            mode="lines",
+            name=f"Empirical ROC — AUC {auc(fpr, tpr):.3f}",
+            line={"color": _EPSILON_FIGURE_ROC_COLOR, "dash": "solid"},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+    epsilon = compute_epsilon_for_delta(fpr, tpr, delta)
+    log_slope = epsilon if np.isfinite(epsilon) else float("inf")
+    if np.isfinite(log_slope):
+        _add_privacy_bound_layer(
+            figure,
+            log_slope,
+            delta,
+            resolution=resolution,
+            line_color=_EPSILON_FIGURE_BOUND_COLOR,
+        )
+    _add_random_classifier_layer(figure)
+
+    epsilon_text = _format_epsilon_for_title(epsilon)
+    return _finalize_roc_canvas(
+        figure,
+        (
+            f"{display_name} (empirical): ε = {epsilon_text} at "
+            f"δ = {_format_delta_scientific(delta)}, scale = {scale:.2g}, "
+            f"samples per class = {n_samples}"
+        ),
+        lower,
+        upper,
+    )
+
+
+class TheoryROCVisualizer(AbstractInteractivePlot):
+    """Theoretical ROC explorer with optional epsilon-from-delta overlay."""
+
+    def __init__(
+        self,
+        distribution: str = "Laplace",
+        scale: float = 1.0,
+        delta: float = _DELTA_DEFAULT_THEORY,
+        *,
+        compute_epsilon: bool = False,
+        show_compute_epsilon_toggle: bool = True,
+        selectable_distribution: bool = True,
+        auto_display: bool = True,
+    ):
+        if scale <= 0:
+            raise ValueError("scale must be positive")
+        if not _DELTA_MIN <= delta <= 1:
+            raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+
+        self.distribution = _empirical_distribution(distribution)[0]
+        self.scale = float(scale)
+        self.delta = float(delta)
+        self.compute_epsilon = bool(compute_epsilon or not show_compute_epsilon_toggle)
+        self.show_compute_epsilon_toggle = bool(show_compute_epsilon_toggle)
+        self.selectable_distribution = bool(selectable_distribution)
+        self._rendered = self.widget()
+
+        # When the distribution is fixed there is no selector control to expose.
+        self.distribution_control = self._rendered.controls.get("distribution")
+        self.scale_slider = self._rendered.controls["scale"]
+        self.compute_epsilon_toggle = self._rendered.controls.get("compute_epsilon")
+        self.delta_slider = self._rendered.controls["delta"]
+        self.interactive_plot = self._rendered.root
+
+        if auto_display:
+            display(self._rendered.root)
+
+    def widget(self, **renderer_options):
+        from .interactive_widgets import render_ipywidgets
+
+        return render_ipywidgets(
+            self.build_spec(),
+            layout=_roc_visualizer_layout(
+                distribution_name=self.distribution,
+                selectable_distribution=self.selectable_distribution,
+                show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
+            ),
+            **renderer_options,
+        )
+
+    def spec(self) -> InteractiveSpec:
+        controls = _theory_roc_interactive_controls(
+            self.scale,
+            self.distribution,
+            delta=self.delta,
+            compute_epsilon=self.compute_epsilon,
+            show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
+            selectable_distribution=self.selectable_distribution,
+        )
+        fixed_kwargs: dict[str, object] = {}
+        if not self.selectable_distribution:
+            fixed_kwargs = {"distribution": self.distribution}
+        if not self.show_compute_epsilon_toggle:
+            fixed_kwargs["compute_epsilon"] = True
+        return InteractiveSpec(
+            name="theory_roc_visualizer",
+            artifact_name="theory-roc-visualizer",
+            controls=controls,
+            preferred_backend="ipywidgets",
+            allowed_backends=("ipywidgets",),
+            fixed_kwargs=fixed_kwargs,
+            make_figure=partial(
+                _make_theory_roc_interactive_figure,
+                resolution=1000,
+            ),
+            figure_factory=(
+                "libdpy.visualization.roc_plots:_make_theory_roc_interactive_figure"
+            ),
+            description=("Theoretical ROC explorer for common distributions."),
+        )
+
+    def plot_curves(
+        self,
+        scale: float,
+        distribution: str | None = None,
+        *,
+        compute_epsilon: bool | None = None,
+        delta: float | None = None,
+    ) -> go.Figure:
+        """Return the current state as a Plotly figure."""
+
+        resolved_compute_epsilon = (
+            self.compute_epsilon
+            if compute_epsilon is None
+            else compute_epsilon
+        )
+        resolved_delta = self.delta if delta is None else delta
+        return _make_theory_roc_interactive_figure(
+            distribution or self.distribution,
+            scale,
+            compute_epsilon=resolved_compute_epsilon,
+            delta=resolved_delta,
+        )
+
+    def show(self):
+        """Display the already-created widget without rebuilding its state."""
+
+        display(self._rendered.root)
+        return self._rendered.root
+
+
+class EpsilonFromDeltaVisualizer(TheoryROCVisualizer):
+    """Backward-compatible alias for ``TheoryROCVisualizer`` with epsilon mode enabled."""
+
+    def __init__(
+        self,
+        distribution: str = "Laplace",
+        scale: float = 1.0,
+        delta: float = _DELTA_DEFAULT_THEORY,
+        *,
+        selectable_distribution: bool = True,
+        auto_display: bool = True,
+    ):
+        super().__init__(
+            distribution=distribution,
+            scale=scale,
+            delta=delta,
+            compute_epsilon=True,
+            show_compute_epsilon_toggle=False,
+            selectable_distribution=selectable_distribution,
+            auto_display=auto_display,
+        )
+
+
+class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
+    """Backward-compatible alias for ``EmpROCVisualizer`` with epsilon mode enabled."""
+
+    def __init__(
+        self,
+        n_samples: int,
+        distribution: str = "Laplace",
+        scale: float = 1.0,
+        delta: float = _DELTA_DEFAULT_EMPIRICAL,
+        *,
+        selectable_distribution: bool = True,
+        random_seed: int | None = None,
+        auto_display: bool = True,
+    ):
+        super().__init__(
+            n_samples,
+            distribution=distribution,
+            scale=scale,
+            delta=delta,
+            compute_epsilon=True,
+            show_compute_epsilon_toggle=False,
+            selectable_distribution=selectable_distribution,
+            random_seed=random_seed,
+            auto_display=auto_display,
+        )

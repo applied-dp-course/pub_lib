@@ -11,7 +11,6 @@ from statistics import NormalDist
 import plotly.graph_objects as go
 
 from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec, iframe_embed
-from .interactive_widgets import render_ipywidgets
 
 
 def _linspace(start: float, stop: float, count: int) -> list[float]:
@@ -272,6 +271,8 @@ def privacy_plot_ipywidgets(
     res: int = 100,
 ):
     """Return the established widget root through the shared renderer."""
+
+    from .interactive_widgets import render_ipywidgets
 
     return render_ipywidgets(privacy_plot_spec(distribution_types, sensitivity, std, res)).root
 

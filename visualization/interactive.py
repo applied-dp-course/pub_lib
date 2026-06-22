@@ -17,11 +17,13 @@ import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
 Backend = Literal["ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"]
-ControlKind = Literal["slider", "select", "checkbox", "button_group"]
+ControlKind = Literal["slider", "select", "checkbox", "button_group", "toggle_button"]
 SliderScale = Literal["linear", "log"]
 
 _VALID_BACKENDS = frozenset({"ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"})
-_VALID_CONTROL_KINDS = frozenset({"slider", "select", "checkbox", "button_group"})
+_VALID_CONTROL_KINDS = frozenset(
+    {"slider", "select", "checkbox", "button_group", "toggle_button"}
+)
 _PYTHON_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -40,6 +42,7 @@ class ControlSpec:
     continuous: bool = True
     slider_scale: SliderScale = "linear"
     readout_format: str | None = None
+    readout_formatter: Callable[[float], str] | None = None
     throttle_ms: int | None = None
     description: str = ""
 
@@ -70,8 +73,8 @@ class ControlSpec:
                 raise ValueError(f"control {self.name!r} requires explicit values")
             if self.default not in self.values:
                 raise ValueError(f"control {self.name!r} default is not one of its values")
-        elif self.kind == "checkbox" and not isinstance(self.default, bool):
-            raise ValueError(f"checkbox {self.name!r} requires a boolean default")
+        elif self.kind in {"checkbox", "toggle_button"} and not isinstance(self.default, bool):
+            raise ValueError(f"{self.kind} {self.name!r} requires a boolean default")
         if self.throttle_ms is not None and self.throttle_ms < 0:
             raise ValueError(f"control {self.name!r} throttle_ms must be nonnegative")
 

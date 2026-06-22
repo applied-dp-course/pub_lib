@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from html import escape
 from typing import Any, MutableMapping
 
 import ipywidgets as widgets
@@ -30,11 +31,28 @@ class RenderedInteractive:
     update: Callable[[], None]
 
 
+def _attach_formatted_slider_description(
+    slider: widgets.FloatLogSlider | widgets.FloatSlider | widgets.IntSlider,
+    control: ControlSpec,
+) -> None:
+    if control.readout_formatter is None:
+        return
+
+    def sync_description(change: dict[str, Any]) -> None:
+        slider.description = (
+            f"{control.label} = {control.readout_formatter(float(change['new']))}"
+        )
+
+    slider.readout = False
+    slider.observe(sync_description, names="value")
+    slider.description = f"{control.label} = {control.readout_formatter(float(control.default))}"
+
+
 def _slider_widget(control: ControlSpec) -> widgets.Widget:
     values = (control.default, control.min, control.max, control.step)
     is_integer = all(isinstance(value, int) and not isinstance(value, bool) for value in values)
     if control.slider_scale == "log":
-        return widgets.FloatLogSlider(
+        slider = widgets.FloatLogSlider(
             value=control.default,
             base=10,
             min=math.log10(control.min),
@@ -42,26 +60,32 @@ def _slider_widget(control: ControlSpec) -> widgets.Widget:
             step=control.step,
             description=control.label,
             continuous_update=control.continuous,
+            readout=control.readout_formatter is None,
             readout_format=control.readout_format
             or (".0f" if isinstance(control.default, int) else ".3g"),
             style={"description_width": "initial"},
             layout=widgets.Layout(width="auto", min_width="280px"),
         )
+        _attach_formatted_slider_description(slider, control)
+        return slider
     slider_type = widgets.IntSlider if is_integer else widgets.FloatSlider
     kwargs: dict[str, Any] = {}
     if control.readout_format is not None:
         kwargs["readout_format"] = control.readout_format
-    return slider_type(
+    slider = slider_type(
         value=control.default,
         min=control.min,
         max=control.max,
         step=control.step,
         description=control.label,
         continuous_update=control.continuous,
+        readout=control.readout_formatter is None,
         style={"description_width": "initial"},
         layout=widgets.Layout(width="auto", min_width="220px"),
         **kwargs,
     )
+    _attach_formatted_slider_description(slider, control)
+    return slider
 
 
 def _control_widget(control: ControlSpec) -> widgets.Widget:
@@ -81,6 +105,15 @@ def _control_widget(control: ControlSpec) -> widgets.Widget:
             description=control.label,
             indent=False,
         )
+    if control.kind == "toggle_button":
+        button = widgets.ToggleButton(
+            value=bool(control.default),
+            description=control.label,
+            tooltip=control.description or control.label,
+            layout=widgets.Layout(width="auto", min_width="120px", height="30px"),
+        )
+        button.style.font_size = "0.95rem"
+        return button
     if control.kind == "button_group":
         return widgets.ToggleButtons(
             options=list(control.values or ()),
@@ -122,6 +155,244 @@ def replace_figure_widget(
             scene = getattr(target.layout, scene_name, None)
             if scene is not None and property_name == "camera":
                 scene.camera = value
+
+
+def _full_width_slider(slider: widgets.Widget) -> widgets.Widget:
+    slider.layout = widgets.Layout(width="100%", min_width="0")
+    return slider
+
+
+# Above-figure readouts (scale on the left, privacy on the right) share one font so
+# the "Scale = ..." message and the "(ε, δ)-DP" message read as a matched pair. The
+# font is kept below the centered distribution title, and the compute-ε toggle button
+# is sized to sit on the same line beside them.
+_READOUT_STYLE = "font-size:1.05rem;font-weight:600;line-height:1.4;white-space:nowrap;"
+
+
+def _readout_html(text: str, *, center: bool = False) -> str:
+    span = f'<span style="{_READOUT_STYLE}">{escape(text)}</span>'
+    if not center:
+        return span
+    return f'<div style="text-align:center;width:100%;">{span}</div>'
+
+
+def _subplot_aligned_grid_row(
+    *,
+    left: widgets.Widget | None,
+    right: widgets.Widget | None,
+    figure_width: int,
+    slider_grid_template: str,
+) -> widgets.GridBox:
+    empty = widgets.Box(layout=widgets.Layout(width="100%"))
+    return widgets.GridBox(
+        [
+            empty,
+            left or empty,
+            empty,
+            right or empty,
+            empty,
+        ],
+        layout=widgets.Layout(
+            width=f"{figure_width}px",
+            max_width="100%",
+            grid_template_columns=slider_grid_template,
+            grid_gap="0px",
+        ),
+    )
+
+
+def _column_box(child_widgets: Sequence[widgets.Widget]) -> widgets.Widget:
+    if not child_widgets:
+        return widgets.Box(layout=widgets.Layout(width="100%"))
+    if len(child_widgets) == 1:
+        return child_widgets[0]
+    return widgets.VBox(
+        list(child_widgets),
+        layout=widgets.Layout(width="100%", min_width="0", grid_gap="6px"),
+    )
+
+
+def _distribution_title_html(name: str) -> str:
+    return (
+        f'<div style="text-align:center;font-size:1.35rem;font-weight:600;'
+        f'margin:6px 0 4px;width:100%;">{escape(name)} distribution</div>'
+    )
+
+
+def _set_widget_shown(widget: widgets.Widget, shown: bool) -> None:
+    widget.layout.display = None if shown else "none"
+
+
+def roc_subplot_control_layout(
+    *,
+    scale_readout: Callable[[Mapping[str, widgets.Widget]], str],
+    privacy_readout: Callable[[Mapping[str, widgets.Widget]], str] | None = None,
+    compute_epsilon_control: str | None = None,
+    below_left: Sequence[str] = ("scale",),
+    below_right: Sequence[str] = ("delta",),
+    below_left_footer: Sequence[str] = (),
+    below_right_footer_actions: Sequence[str] = (),
+    toolbar: Sequence[str] = (),
+    centered_title: str = "",
+    centered_title_control: str | None = None,
+    figure_width: int = 1000,
+    slider_grid_template: str | None = None,
+) -> ControlLayout:
+    """Lay out the ROC explorer controls aligned with its PDF and ROC subplot panels.
+
+    The result stacks vertically::
+
+        [ distribution selector ]            (optional toolbar)
+        [ centered distribution title ]      (optional)
+        [ "Scale = ..."  |  Compute ε  (ε, δ)-DP ]   above-figure readouts
+        [               figure              ]
+        [ scale slider   |  delta slider ]   below-figure primary controls
+        [ samples slider |  Generate button ]   below-figure footer (empirical only)
+
+    The delta slider and the ``(ε, δ)-DP`` readout are revealed only once epsilon
+    computation is active -- either because the compute-ε toggle is pressed, or
+    because the explorer was created with epsilon mode permanently on (no toggle).
+    """
+
+    def layout(
+        figure: go.FigureWidget,
+        controls: Mapping[str, widgets.Widget],
+        actions: Mapping[str, widgets.Button],
+        errors: widgets.Output,
+    ) -> widgets.Widget:
+        grid_template = slider_grid_template or f"{figure_width}px"
+
+        def aligned_row(
+            left: widgets.Widget | None,
+            right: widgets.Widget | None,
+        ) -> widgets.GridBox:
+            return _subplot_aligned_grid_row(
+                left=left,
+                right=right,
+                figure_width=figure_width,
+                slider_grid_template=grid_template,
+            )
+
+        def sliders(names: Sequence[str]) -> list[widgets.Widget]:
+            return [_full_width_slider(controls[name]) for name in names if name in controls]
+
+        def epsilon_active() -> bool:
+            if compute_epsilon_control is None or compute_epsilon_control not in controls:
+                return True
+            return bool(controls[compute_epsilon_control].value)
+
+        # --- optional distribution toolbar + centered title -------------------
+        toolbar_widgets = [controls[name] for name in toolbar if name in controls]
+        toolbar_row = widgets.HBox(
+            toolbar_widgets,
+            layout=widgets.Layout(
+                width=f"{figure_width}px",
+                max_width="100%",
+                display="flex",
+                flex_flow="row wrap",
+                align_items="center",
+                grid_gap="8px",
+            ),
+        )
+        title_widget = widgets.HTML(
+            value=_distribution_title_html(centered_title),
+            layout=widgets.Layout(width=f"{figure_width}px", max_width="100%"),
+        )
+        if centered_title_control and centered_title_control in controls:
+
+            def sync_centered_title(_change: dict[str, Any] | None = None) -> None:
+                title_widget.value = _distribution_title_html(
+                    str(controls[centered_title_control].value)
+                )
+
+            controls[centered_title_control].observe(sync_centered_title, names="value")
+            sync_centered_title()
+
+        # --- above-figure readouts: scale message | compute toggle + DP message.
+        # Each side is centered under its subplot panel.
+        scale_label = widgets.HTML(layout=widgets.Layout(width="100%"))
+        privacy_label = widgets.HTML(layout=widgets.Layout(margin="0 0 0 12px"))
+        above_right_widgets: list[widgets.Widget] = []
+        if compute_epsilon_control and compute_epsilon_control in controls:
+            above_right_widgets.append(controls[compute_epsilon_control])
+        if privacy_readout is not None:
+            above_right_widgets.append(privacy_label)
+        above_right = (
+            widgets.HBox(
+                above_right_widgets,
+                layout=widgets.Layout(
+                    width="100%",
+                    display="flex",
+                    flex_flow="row wrap",
+                    align_items="center",
+                    justify_content="center",
+                    grid_gap="10px",
+                ),
+            )
+            if above_right_widgets
+            else None
+        )
+        above_row = aligned_row(left=scale_label, right=above_right)
+
+        # --- below-figure primary controls: scale slider | delta slider -------
+        primary_row = aligned_row(
+            left=_column_box(sliders(below_left)),
+            right=_column_box(sliders(below_right)),
+        )
+
+        # --- below-figure footer: samples slider | generate button ------------
+        footer_left = sliders(below_left_footer)
+        footer_right = [actions[name] for name in below_right_footer_actions if name in actions]
+        for button in footer_right:
+            button.layout = widgets.Layout(width="100%", min_width="0")
+        footer_row = (
+            aligned_row(
+                left=_column_box(footer_left) if footer_left else None,
+                right=_column_box(footer_right) if footer_right else None,
+            )
+            if footer_left or footer_right
+            else None
+        )
+
+        def sync_readouts(_change: dict[str, Any] | None = None) -> None:
+            active = epsilon_active()
+            scale_label.value = _readout_html(scale_readout(controls), center=True)
+            for name in below_right:
+                if name in controls:
+                    _set_widget_shown(controls[name], active)
+            if privacy_readout is None:
+                return
+            if not active:
+                privacy_label.value = ""
+                _set_widget_shown(privacy_label, False)
+                return
+            try:
+                text = privacy_readout(controls)
+            except Exception as error:
+                text = f"{type(error).__name__}: {error}"
+            privacy_label.value = _readout_html(text)
+            _set_widget_shown(privacy_label, True)
+
+        for name in ("compute_epsilon", "scale", "delta", "distribution"):
+            if name in controls:
+                controls[name].observe(sync_readouts, names="value")
+        sync_readouts()
+
+        children: list[widgets.Widget] = []
+        if toolbar_widgets:
+            children.append(toolbar_row)
+        if centered_title or centered_title_control:
+            children.append(title_widget)
+        children.extend([above_row, figure, primary_row])
+        if footer_row is not None:
+            children.append(footer_row)
+        children.append(errors)
+        return widgets.VBox(
+            children,
+            layout=widgets.Layout(width=f"{figure_width}px", max_width="100%"),
+        )
+
+    return layout
 
 
 def _default_layout(
