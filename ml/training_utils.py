@@ -22,8 +22,12 @@ class BatchLearningParameters:
     noise_factor: float = 0.0
 
 
-def shuffle_data(labeled_data: LabeledData) -> LabeledData:
-    idx = np.random.permutation(labeled_data['data'].shape[0])
+def shuffle_data(
+    labeled_data: LabeledData, rng: np.random.Generator | None = None
+) -> LabeledData:
+    if rng is None:
+        rng = np.random.default_rng()
+    idx = rng.permutation(labeled_data['data'].shape[0])
     return {'data': labeled_data['data'][idx], 'labels': labeled_data['labels'][idx]}
 
 
@@ -51,14 +55,15 @@ def naive_training(
 
 
 def SGD(
-    labeled_data: LabeledData, model_class, params: BatchLearningParameters
+    labeled_data: LabeledData, model_class, params: BatchLearningParameters, seed=None
 ) -> GradientBasedModel:
+    rng = np.random.default_rng(seed)
     batch_size = params.batch_size if params.batch_size is not None else len(labeled_data['labels'])
     curr_weights = model_class.get_initial_weights((labeled_data['data'])[0].shape)
     weights_arr = [curr_weights.copy()]
 
     for _ in range(params.num_epochs):
-        labeled_data = shuffle_data(labeled_data)
+        labeled_data = shuffle_data(labeled_data, rng=rng)
         batches = split_to_batches(labeled_data, batch_size)
 
         for batch_labeled_data in batches:
@@ -151,8 +156,8 @@ def split_samples_by_label_and_confidence(
     return data_by_class_and_bin, probability_bins
 
 
-def shuffle_and_split(batch_size, labeled_data):
-    labeled_data = shuffle_data(labeled_data)
+def shuffle_and_split(batch_size, labeled_data, rng: np.random.Generator | None = None):
+    labeled_data = shuffle_data(labeled_data, rng=rng)
     batches = split_to_batches(labeled_data, batch_size)
     return batches
 
@@ -207,26 +212,32 @@ def DP_naive_training(
     labeled_data: LabeledData,
     model_class=Model,
     params: PrivateBatchLearningParameters | None = None,
+    seed=None,
 ) -> Model:
     assert params is not None
+    rng = np.random.default_rng(seed)
     data, labels = labeled_data['data'], labeled_data['labels']
     mean_label_0_data = np.mean(data[labels == 0], axis=0)
     mean_label_1_data = np.mean(data[labels == 1], axis=0)
     weights = mean_label_1_data - mean_label_0_data
-    weights += np.random.normal(0, params.noise_factor, weights.shape)
+    weights += rng.normal(0, params.noise_factor, weights.shape)
     weights /= np.linalg.norm(weights)
     return model_class([weights])
 
 
 def DP_SGD(
-    labeled_data: LabeledData, model_class: type[T], params: PrivateBatchLearningParameters
+    labeled_data: LabeledData,
+    model_class: type[T],
+    params: PrivateBatchLearningParameters,
+    seed=None,
 ) -> T:
+    rng = np.random.default_rng(seed)
     batch_size = params.batch_size if params.batch_size is not None else len(labeled_data['labels'])
     curr_weights = model_class.get_initial_weights((labeled_data['data'])[0].shape)
     weights_arr = [curr_weights.copy()]
 
     for _ in range(params.num_epochs):
-        labeled_data = shuffle_data(labeled_data)
+        labeled_data = shuffle_data(labeled_data, rng=rng)
         batches = split_to_batches(labeled_data, batch_size)
 
         for batch_labeled_data in batches:
@@ -234,7 +245,7 @@ def DP_SGD(
             norm = np.linalg.norm(full_gradient, axis=1, keepdims=True)
             full_gradient *= np.clip(params.clipping_radius / (norm + 1e-8), None, 1)
             gradient = np.mean(full_gradient, axis=0)
-            gradient += np.random.normal(0, params.noise_factor, gradient.shape)
+            gradient += rng.normal(0, params.noise_factor, gradient.shape)
             curr_weights += params.learning_rate * gradient
         weights_arr.append(curr_weights.copy())
     model = model_class(weights_arr)

@@ -9,7 +9,11 @@ from libdpy.privacy_mechanisms.noise import laplace_noise
 
 
 def above_threshold(
-    database: list, queries: List[Callable], threshold: float, epsilon: float
+    database: list,
+    queries: List[Callable],
+    threshold: float,
+    epsilon: float,
+    rng: np.random.Generator | None = None,
 ) -> List[bool]:
     """
     This function implements the Above Threshold mechanism.
@@ -17,13 +21,16 @@ def above_threshold(
     :param queries: a list of queries with sensitivity=1, which are functions that gets a database as input and returns a number
     :param threshold: the threshold value for the queries results
     :param epsilon: the privacy parameter
+    :param rng: optional NumPy generator for deterministic noise; defaults to fresh randomness.
     :return: a list of boolean responses - an estimation for whether the results pass the threshold.
     The list ends with the first positive result, if exists.
     """
+    if rng is None:
+        rng = np.random.default_rng()
     responses = []
-    noised_threshold = threshold + laplace_noise(2 / epsilon)
+    noised_threshold = threshold + laplace_noise(2 / epsilon, rng=rng)
     for query in queries:
-        noised_response = query(database) + laplace_noise(4 / epsilon)
+        noised_response = query(database) + laplace_noise(4 / epsilon, rng=rng)
         if noised_response >= noised_threshold:
             responses.append(True)
             return responses
@@ -32,13 +39,15 @@ def above_threshold(
     return responses
 
 
-def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m):
+def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m, seed=None):
+    rng = np.random.default_rng(seed)
+
     # Set up a grid of subplots for visualizing histograms (one for each epsilon).
     fig, axs = plt.subplots(1, len(epsilon_list), figsize=(20, 5))
 
     # Step 1: Generate the dataset
     # Create a binary matrix X where each element represents whether a student attends a class (1) or not (0).
-    X = np.random.binomial(1, p, (n, m))
+    X = rng.binomial(1, p, (n, m))
 
     # Define the queries: Each query computes the sum of a specific column (class attendance count).
     queries = [(lambda dataset, j=i: np.sum(dataset[:, j])) for i in range(m)]
@@ -60,7 +69,7 @@ def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m):
         # Repeat the experiment for the given number of trials.
         for _ in range(num_trials):
             # Run the AboveThreshold algorithm on the dataset with the given threshold and privacy level.
-            T_F_list = above_threshold(X, queries, T, epsilon)
+            T_F_list = above_threshold(X, queries, T, epsilon, rng=rng)
 
             # Record the halt iteration (length of T_F_list).
             halt_iteration = len(T_F_list)

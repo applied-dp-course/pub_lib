@@ -5,11 +5,21 @@ from libdpy.privacy_mechanisms.noise import laplace_noise
 
 
 class AboveThresholdOnline:
-    def __init__(self, database, epsilon: float, sensitivity: float, threshold: float):
+    def __init__(
+        self,
+        database,
+        epsilon: float,
+        sensitivity: float,
+        threshold: float,
+        seed: int | None = None,
+    ):
         self.database = database
         self.epsilon = epsilon
         self.sensitivity = sensitivity
-        self.noised_threshold = threshold + laplace_noise(2 * self.sensitivity / self.epsilon)
+        self.rng = np.random.default_rng(seed)
+        self.noised_threshold = threshold + laplace_noise(
+            2 * self.sensitivity / self.epsilon, rng=self.rng
+        )
         self.can_be_used = True
 
     def is_above_threshold(self, query: Callable):
@@ -18,7 +28,9 @@ class AboveThresholdOnline:
                 "AboveThresholdOnline has already answered positively and cannot be used again."
             )
         response = query(self.database)
-        noised_response = response + laplace_noise(4 * self.sensitivity / self.epsilon)
+        noised_response = response + laplace_noise(
+            4 * self.sensitivity / self.epsilon, rng=self.rng
+        )
         is_above_threshold = noised_response >= self.noised_threshold
         if is_above_threshold:
             self.can_be_used = False

@@ -78,24 +78,28 @@ def noiseless_above_threshold(
 
 
 # ReportNoisyMax for estimating the median, given a sample X, a range R, privacy parameter Eps, and number of queries T
-def ReportNoisyMax_for_median(X, n, R, Eps, T):
+def ReportNoisyMax_for_median(X, n, R, Eps, T, rng: np.random.Generator | None = None):
+    if rng is None:
+        rng = np.random.default_rng()
     L, U = R
     responses = np.linspace(start=L, stop=U, num=T).tolist()
     ind_max = np.argmax(
         [
-            -abs(np.sum(X <= response) - ((n - 1) / 2 + 1)) + np.random.laplace(0, 1 / Eps)
+            -abs(np.sum(X <= response) - ((n - 1) / 2 + 1)) + rng.laplace(0, 1 / Eps)
             for response in responses
         ]
     )
     return responses[ind_max]
 
 
-def DP_binary_search(X, n, R, Eps, T, ind):
+def DP_binary_search(X, n, R, Eps, T, ind, rng: np.random.Generator | None = None):
+    if rng is None:
+        rng = np.random.default_rng()
     counter_right = 0
     L, U = R
     for t in range(T):
         mid = (L + U) / 2
-        count = np.sum(X <= mid) + np.random.laplace(0, 1 / (Eps / T))
+        count = np.sum(X <= mid) + rng.laplace(0, 1 / (Eps / T))
         if count > n / 2:
             U = mid
         else:

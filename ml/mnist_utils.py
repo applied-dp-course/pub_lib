@@ -13,7 +13,6 @@ performed inside the functions to keep this module importable without TF.
 
 from __future__ import annotations
 
-import random
 from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
@@ -31,14 +30,18 @@ def filter_dataset(mask, X, y):
 
 
 def apply_label_flipping(
-    data_set: Dict[str, np.ndarray], flip_probability: float
+    data_set: Dict[str, np.ndarray], flip_probability: float, seed=None
 ) -> Dict[str, np.ndarray]:
     """Flip binary labels (0/1) with probability `flip_probability`."""
     if flip_probability <= 0:
         return data_set
 
+    rng = np.random.default_rng(seed)
     flipped_labels = np.array(
-        [label if random.random() > flip_probability else 1 - label for label in data_set["labels"]]
+        [
+            label if rng.random() > flip_probability else 1 - label
+            for label in data_set["labels"]
+        ]
     )
     return {"data": data_set["data"], "labels": flipped_labels}
 
@@ -54,6 +57,7 @@ def load_and_preprocess(
     data_params,
     mask=lambda d: (d == 0) | (d == 1),
     data_source: str = "mnist_784",
+    seed=None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
     Load MNIST from OpenML, optionally filter labels, normalize pixels, add bias,
@@ -76,7 +80,9 @@ def load_and_preprocess(
     test_data_set = {"data": X_test, "labels": y_test}
 
     if getattr(data_params, "flip_probability", 0.0) > 0:
-        train_data_set = apply_label_flipping(train_data_set, data_params.flip_probability)
+        train_data_set = apply_label_flipping(
+            train_data_set, data_params.flip_probability, seed=seed
+        )
     return train_data_set, test_data_set
 
 

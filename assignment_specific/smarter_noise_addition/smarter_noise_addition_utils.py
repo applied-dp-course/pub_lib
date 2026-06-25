@@ -1,5 +1,6 @@
-import random
 from typing import List, Callable, Tuple
+
+import numpy as np
 
 from libdpy.attacks.membership_inference.classical_auditing_utils import get_mean_estimation_error
 from libdpy.privacy_mechanisms.noise import laplace_noise
@@ -14,23 +15,26 @@ def get_error(weights: List[float], estimation: float) -> float:
     return abs(sum(weights) - estimation)
 
 
-def get_passengers_weights() -> List[float]:
+def get_passengers_weights(rng: np.random.Generator | None = None) -> List[float]:
     """Generate random passenger weights for evaluation."""
-    weights_range = random.choice(WEIGHTS_RANGES)
+    if rng is None:
+        rng = np.random.default_rng()
+    weights_range = WEIGHTS_RANGES[rng.integers(len(WEIGHTS_RANGES))]
     weights_range_min, weights_range_max = weights_range
     passengers_weights = [
-        random.uniform(weights_range_min, weights_range_max) for _ in range(PASSENGERS_NUMBER)
+        rng.uniform(weights_range_min, weights_range_max) for _ in range(PASSENGERS_NUMBER)
     ]
     return passengers_weights
 
 
 def get_passengers_weight_mean_estimation_error(
-    estimation_function: Callable, epsilon: float, experiments_number: int, **kwargs
+    estimation_function: Callable, epsilon: float, experiments_number: int, seed=None, **kwargs
 ) -> float:
     """Calculate mean estimation error over multiple experiments."""
+    rng = np.random.default_rng(seed)
     return get_mean_estimation_error(
         estimation_function=estimation_function,
-        data_generator=get_passengers_weights,
+        data_generator=lambda: get_passengers_weights(rng=rng),
         epsilon=epsilon,
         experiments_number=experiments_number,
         error_function=get_error,
@@ -42,7 +46,12 @@ def project(value: float, range_min: float, range_max: float) -> float:
     return max(range_min, min(value, range_max))
 
 
-def estimate_sum(weights: list, weights_range: Range, epsilon: float) -> float:
+def estimate_sum(
+    weights: list,
+    weights_range: Range,
+    epsilon: float,
+    rng: np.random.Generator | None = None,
+) -> float:
     """
     This function estimates the sum of the weights in a DP way.
     It projects the weights to a predefined range to ensure privacy.
@@ -55,5 +64,5 @@ def estimate_sum(weights: list, weights_range: Range, epsilon: float) -> float:
     range_min, range_max = weights_range
     sensitivity = range_max - range_min
     projected_weights = [project(weight, range_min, range_max) for weight in weights]
-    estimated_sum = sum(projected_weights) + laplace_noise(scale=sensitivity / epsilon)
+    estimated_sum = sum(projected_weights) + laplace_noise(scale=sensitivity / epsilon, rng=rng)
     return estimated_sum

@@ -8,8 +8,12 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.special import xlogy
 
-from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive import ActionSpec, ControlSpec, InteractiveSpec
 from libdpy.visualization.interactive_widgets import render_ipywidgets
+from libdpy.assignment_specific.privacy_auditing.utils import (
+    run_repeated_gaussian_audits,
+    true_epsilon_gaussian_threshold,
+)
 
 
 def make_binomial_alpha_bounds_figure(
@@ -18,7 +22,7 @@ def make_binomial_alpha_bounds_figure(
     *,
     n_range: Sequence[int] = tuple(range(1, 1001)),
 ) -> go.Figure:
-    """Return Markov, Chebyshev, and Hoeffding alpha bounds."""
+    """Return the Hoeffding one-sided error bound as a function of ``n``."""
 
     if not 0 <= p <= 1:
         raise ValueError("p must be between 0 and 1")
@@ -29,13 +33,9 @@ def make_binomial_alpha_bounds_figure(
     if n.ndim != 1 or len(n) == 0 or np.any(n <= 0):
         raise ValueError("n_range must contain positive sample sizes")
 
-    bounds = {
-        "Markov": np.minimum(1 - p, p / beta) * np.ones_like(n),
-        "Chebyshev": np.minimum(1 - p, np.sqrt((p * (1 - p)) / (n * beta))),
-        "Hoeffding": np.minimum(1 - p, np.sqrt(-np.log(beta) / (2 * n))),
-    }
+    hoeffding = np.minimum(1 - p, np.sqrt(-np.log(beta) / (2 * n)))
     figure = go.Figure(
-        [go.Scatter(x=n, y=values, mode="lines", name=name) for name, values in bounds.items()]
+        [go.Scatter(x=n, y=hoeffding, mode="lines", name="Hoeffding")]
     )
     figure.update_layout(
         title=f"Error Bounds (p={p:.2f}, β={beta:.2e})",
@@ -54,7 +54,7 @@ def make_binomial_beta_bounds_figure(
     n_range: Sequence[int] = tuple(range(100, 1001)),
     log_y: bool = False,
 ) -> go.Figure:
-    """Return Chebyshev, Hoeffding, and Chernoff beta bounds."""
+    """Return Hoeffding and Chernoff one-sided failure-probability bounds."""
 
     if not 0 <= p <= 1:
         raise ValueError("p must be between 0 and 1")
@@ -65,10 +65,6 @@ def make_binomial_beta_bounds_figure(
         raise ValueError("n_range must contain positive sample sizes")
 
     effective_alpha = min(alpha, 1 - p)
-    chebyshev = np.minimum(
-        1.0,
-        (p * (1 - p)) / (n * max(effective_alpha, np.finfo(float).eps) ** 2),
-    )
     hoeffding = np.exp(-2 * n * effective_alpha**2)
 
     chernoff_alpha = min(alpha, max(0.0, 1 - p - 1e-6))
@@ -88,7 +84,6 @@ def make_binomial_beta_bounds_figure(
 
     figure = go.Figure(
         [
-            go.Scatter(x=n, y=chebyshev, mode="lines", name="Chebyshev"),
             go.Scatter(x=n, y=hoeffding, mode="lines", name="Hoeffding"),
             go.Scatter(x=n, y=chernoff, mode="lines", name="Chernoff"),
         ]
@@ -163,3 +158,185 @@ def binomial_alpha_bounds_interactive():
 
 def binomial_beta_bounds_interactive(*, log_y: bool = False):
     return render_ipywidgets(binomial_beta_bounds_spec(log_y=log_y)).root
+
+
+def make_naive_safe_epsilon_histogram_figure(
+    alpha_total: float,
+    n_repeats: int,
+    *,
+    seed: int = 0,
+    scale: float = 1.0,
+    tau: float = 0.5,
+    delta: float = 1e-2,
+    n_audit: int = 500,
+) -> go.Figure:
+    """Compare plug-in and safe audit distributions against the analytic Gaussian truth."""
+
+    if not 0 < alpha_total <= 1:
+        raise ValueError("alpha_total must be in (0, 1]")
+    if n_repeats <= 0:
+        raise ValueError("n_repeats must be positive")
+    if n_audit <= 0:
+        raise ValueError("n_audit must be positive")
+
+    true_eps = true_epsilon_gaussian_threshold(tau, delta, scale=scale)
+    plug_values, safe_values = run_repeated_gaussian_audits(
+        tau,
+        delta,
+        scale=scale,
+        n_audit=n_audit,
+        n_repeats=int(n_repeats),
+        alpha_total=float(alpha_total),
+        seed=int(seed),
+    )
+    finite_plug = [value for value in plug_values if np.isfinite(value)]
+    finite_safe = [value for value in safe_values if np.isfinite(value)]
+    plug_failures = sum(value > true_eps for value in finite_plug)
+    safe_failures = sum(value > true_eps for value in finite_safe)
+
+    figure = go.Figure()
+    if finite_plug:
+        figure.add_trace(
+            go.Histogram(
+                x=finite_plug,
+                name="plug-in ε",
+                opacity=0.55,
+                marker_color="#1f77b4",
+                histnorm="",
+            )
+        )
+    if finite_safe:
+        figure.add_trace(
+            go.Histogram(
+                x=finite_safe,
+                name="safe ε",
+                opacity=0.55,
+                marker_color="#ff7f0e",
+                histnorm="",
+            )
+        )
+    figure.add_vline(
+        x=true_eps,
+        line_color="#d62728",
+        line_width=2,
+        annotation_text=f"true ε = {true_eps:.3g}",
+        annotation_position="top right",
+    )
+    figure.update_layout(
+        title="Naive versus safe audit lower bounds",
+        annotations=[
+            dict(
+                text=(
+                    f"overshoots — plug-in: {plug_failures}/{len(finite_plug)}, "
+                    f"safe: {safe_failures}/{len(finite_safe)} "
+                    f"(target ≤ {alpha_total:.0%})"
+                ),
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=1.06,
+                showarrow=False,
+                font=dict(size=11, color="#555"),
+                xanchor="center",
+            )
+        ],
+        xaxis_title="ε",
+        yaxis_title="frequency",
+        barmode="overlay",
+        width=820,
+        height=480,
+        margin=dict(t=70),
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+    )
+    return figure
+
+
+def naive_safe_epsilon_histogram_spec(
+    *,
+    scale: float = 1.0,
+    tau: float = 0.5,
+    delta: float = 1e-2,
+    n_audit: int = 500,
+    alpha_total: float = 0.05,
+    n_repeats: int = 200,
+    seed: int = 0,
+) -> InteractiveSpec:
+    def resample_action(state, _controls):
+        state["seed"] = int(state.get("seed", seed)) + 1
+        return None
+
+    return InteractiveSpec(
+        name="naive_safe_epsilon_histogram",
+        artifact_name="naive-safe-epsilon-histogram",
+        controls=(
+            ControlSpec(
+                name="alpha_total",
+                kind="slider",
+                label="failure prob. α",
+                default=alpha_total,
+                min=0.01,
+                max=0.2,
+                step=0.01,
+                continuous=True,
+            ),
+            ControlSpec(
+                name="n_repeats",
+                kind="slider",
+                label="repetitions",
+                default=n_repeats,
+                min=50,
+                max=500,
+                step=10,
+                continuous=False,
+            ),
+        ),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets",),
+        fixed_kwargs={
+            "scale": scale,
+            "tau": tau,
+            "delta": delta,
+            "n_audit": n_audit,
+        },
+        make_figure=make_naive_safe_epsilon_histogram_figure,
+        figure_factory=(
+            "libdpy.assignment_specific.privacy_auditing.visualizations:"
+            "make_naive_safe_epsilon_histogram_figure"
+        ),
+        actions=(
+            ActionSpec(
+                name="resample",
+                label="Resample",
+                handler=resample_action,
+                button_style="info",
+            ),
+        ),
+        initial_state={"seed": seed},
+        description=(
+            "Repeated Gaussian audits at a fixed threshold, comparing plug-in and safe estimates "
+            "against the analytic true epsilon."
+        ),
+    )
+
+
+def naive_safe_epsilon_histogram_interactive(
+    *,
+    scale: float = 1.0,
+    tau: float = 0.5,
+    delta: float = 1e-2,
+    n_audit: int = 500,
+    alpha_total: float = 0.05,
+    n_repeats: int = 200,
+    seed: int = 0,
+):
+    return render_ipywidgets(
+        naive_safe_epsilon_histogram_spec(
+            scale=scale,
+            tau=tau,
+            delta=delta,
+            n_audit=n_audit,
+            alpha_total=alpha_total,
+            n_repeats=n_repeats,
+            seed=seed,
+        )
+    ).root

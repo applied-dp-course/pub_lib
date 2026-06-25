@@ -73,8 +73,11 @@ def _clip_grads(
 
 
 def tensorflow_DP_SGD(
-    labeled_data: LabeledData, model_class, params: PrivateBatchLearningParameters
+    labeled_data: LabeledData, model_class, params: PrivateBatchLearningParameters, seed=None
 ) -> GradientBasedModel:
+    if seed is not None:
+        # Seed TensorFlow's global RNG so the stateful shuffle/noise ops below are reproducible.
+        tf.random.set_seed(seed)
     batch_size = params.batch_size if params.batch_size is not None else len(labeled_data['labels'])
     num_batches = len(labeled_data['labels']) // batch_size
     data = labeled_data['data'][: num_batches * batch_size]
@@ -235,9 +238,13 @@ def run_DP_SGD_experiment(
     model_generator: Callable,
     num_experiments: int,
     delta: float,
+    seed=None,
 ) -> Tuple[
     List[Model], np.ndarray[Any, np.dtype[np.float64]], np.ndarray[Any, np.dtype[np.float64]]
 ]:
+    if seed is not None:
+        # Seed TensorFlow's global RNG so model training across the experiment is reproducible.
+        tf.random.set_seed(seed)
     params_size = len(noise_scale)
     models = []
     accuracy_array = np.zeros(params_size)

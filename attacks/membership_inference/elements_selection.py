@@ -50,16 +50,18 @@ def choose_extreme_element_by_comparison(
     model_generator,
     num_subsets: int = 10,
     num_experiments: int = 5,
+    seed: int | None = None,
 ) -> LabeledData:
+    rng = np.random.default_rng(seed)
     size = labeled_data['data'].shape[0]
-    labeled_data = shuffle_data(labeled_data)
+    labeled_data = shuffle_data(labeled_data, rng=rng)
     subset_size = size // num_subsets
     size = subset_size * num_subsets
     labeled_data = {'data': labeled_data['data'][:size], 'labels': labeled_data['labels'][:size]}
 
     score_differences = np.zeros(size)
     for _ in range(num_experiments):
-        indexes = np.random.permutation(size)
+        indexes = rng.permutation(size)
         inverse_indexes = np.argsort(indexes)
         shuffled_data = {
             'data': labeled_data['data'][indexes],
@@ -79,11 +81,15 @@ def choose_extreme_element_by_comparison(
 
 
 def create_random_datasets(
-    labeled_data: LabeledData, element: LabeledData, subset_size: int | None = None
+    labeled_data: LabeledData,
+    element: LabeledData,
+    subset_size: int | None = None,
+    seed: int | None = None,
 ) -> Tuple[LabeledData, LabeledData]:
+    rng = np.random.default_rng(seed)
     if subset_size is None:
         subset_size = labeled_data['data'].shape[0] // 2
-    labeled_data = shuffle_data(labeled_data)
+    labeled_data = shuffle_data(labeled_data, rng=rng)
     labeled_data = {
         'data': labeled_data['data'][:subset_size],
         'labels': labeled_data['labels'][:subset_size],
@@ -108,11 +114,15 @@ def create_random_datasets(
 
 ########### Tomer added this function to run the NN example
 def create_random_datasets_new(
-    labeled_data: LabeledData, element: LabeledData, subset_size: int | None = None
+    labeled_data: LabeledData,
+    element: LabeledData,
+    subset_size: int | None = None,
+    seed: int | None = None,
 ) -> Tuple[LabeledData, LabeledData]:
+    rng = np.random.default_rng(seed)
     if subset_size is None:
         subset_size = labeled_data['data'].shape[0] // 2
-    labeled_data = shuffle_data(labeled_data)
+    labeled_data = shuffle_data(labeled_data, rng=rng)
     labeled_data = {
         'data': labeled_data['data'][:subset_size],
         'labels': labeled_data['labels'][:subset_size],

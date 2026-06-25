@@ -4,10 +4,11 @@ import pandas as pd
 import anonypy
 
 
-def generate_synthetic_data(features_dict, size):
+def generate_synthetic_data(features_dict, size, seed=None):
+    rng = np.random.default_rng(seed)
     data = {}
     for feature, options in features_dict.items():
-        data[feature] = np.array(np.random.choice(options, size))
+        data[feature] = np.array(rng.choice(options, size))
     data = pd.DataFrame(data)
     for col in data:
         data[col] = data[col].astype('category')

@@ -1,6 +1,6 @@
 import math
 from enum import Enum
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any, Callable, Mapping
 
 import numpy as np
@@ -385,6 +385,30 @@ def calc_privacy_bound(log_slope: float, shift: float, res) -> tuple[np.ndarray,
     return x, y
 
 
+def one_sided_privacy_bound(
+    log_slope: float,
+    shift: float,
+    res: int = 100,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the one-sided ROC bound ``TPR = exp(log_slope) * FPR + shift``."""
+
+    if res < 2:
+        raise ValueError("res must be at least 2")
+    if not 0 <= shift <= 1:
+        raise ValueError("shift must be between 0 and 1")
+    if not np.isfinite(log_slope):
+        return np.array([0.0]), np.array([1.0])
+
+    slope = np.exp(max(0.0, log_slope))
+    if slope <= 0:
+        x_end = 1.0
+    else:
+        x_end = min(1.0, (1.0 - shift) / slope)
+    x = np.linspace(0.0, x_end, res)
+    y = slope * x + shift
+    return x, y
+
+
 # Distributions with a closed-form density: they can draw their theoretical PDFs
 # and exact ROC curve.
 _ANALYTIC_ROC_DISTRIBUTIONS = (
@@ -397,7 +421,9 @@ _ANALYTIC_ROC_DISTRIBUTIONS = (
 # The difference of two i.i.d. lognormals has no elementary PDF/CDF, so it is
 # sampling-only (see make_empirical_roc_figure, which skips its theory traces).
 _LOGNORMAL_DIFFERENCE = "Lognormal difference"
-_EMPIRICAL_ROC_DISTRIBUTIONS = _ANALYTIC_ROC_DISTRIBUTIONS + (_LOGNORMAL_DIFFERENCE,)
+_TWO_LOGISTIC_SUM = "Sum of logistic distributions"
+_TWO_LOGISTIC_SCALE2 = 0.4
+_EMPIRICAL_ROC_DISTRIBUTIONS = _ANALYTIC_ROC_DISTRIBUTIONS + (_LOGNORMAL_DIFFERENCE, _TWO_LOGISTIC_SUM)
 _EMPIRICAL_ROC_STUDENT_T_DF = 3
 _EMPIRICAL_ROC_CAUCHY_MARGIN = 6.0
 
@@ -420,6 +446,15 @@ def _empirical_distribution(name: str):
         return "Cauchy", cauchy
     if normalized == "logistic":
         return "Logistic", logistic
+    if normalized in {
+        "two logistic sum",
+        "two-logistic-sum",
+        "two_logistic_sum",
+        "sum of logistic distributions",
+        "sum of logistics",
+        "sum-of-logistic-distributions",
+    }:
+        return _TWO_LOGISTIC_SUM, None
     if normalized in {"lognormal difference", "lognormal-difference", "lognormal_difference"}:
         return _LOGNORMAL_DIFFERENCE, None
     supported = ", ".join(f"'{name}'" for name in _EMPIRICAL_ROC_DISTRIBUTIONS)
@@ -528,17 +563,41 @@ def _sample_lognormal_difference(
     return loc + first - second
 
 
+def _sample_two_logistic_sum(
+    loc: float,
+    scale1: float,
+    size: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Sample ``loc + Z_1 + Z_2`` with independent logistics (sampling-only distribution)."""
+
+    from libdpy.privacy_mechanisms.noise import two_logistic_noise
+
+    return loc + two_logistic_noise(
+        size=size,
+        scale1=scale1,
+        scale2=_TWO_LOGISTIC_SCALE2,
+        rng=rng,
+    )
+
+
 def _generate_empirical_roc_samples(
     distribution: str,
     scale: float,
     n_samples: int,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    _, distribution_type = _empirical_distribution(distribution)
+    display_name, distribution_type = _empirical_distribution(distribution)
     rng = np.random.default_rng(seed)
     if distribution_type is None:
-        negative_samples = _sample_lognormal_difference(0, scale, n_samples, rng)
-        positive_samples = _sample_lognormal_difference(1, scale, n_samples, rng)
+        if display_name == _TWO_LOGISTIC_SUM:
+            negative_samples = _sample_two_logistic_sum(0, scale, n_samples, rng)
+            positive_samples = _sample_two_logistic_sum(1, scale, n_samples, rng)
+        elif display_name == _LOGNORMAL_DIFFERENCE:
+            negative_samples = _sample_lognormal_difference(0, scale, n_samples, rng)
+            positive_samples = _sample_lognormal_difference(1, scale, n_samples, rng)
+        else:
+            raise ValueError(f"unsupported sampling-only distribution: {display_name}")
     else:
         negative_samples = _sample_empirical_roc_dist(
             distribution_type,
@@ -652,6 +711,8 @@ def _add_theory_roc_layer(
     *,
     resolution: int,
     line_color: str = "purple",
+    fpr: np.ndarray | None = None,
+    tpr: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Add the optimal (Neyman-Pearson) ROC curve to the ROC panel.
 
@@ -660,7 +721,8 @@ def _add_theory_roc_layer(
     monotone (a one-sided value threshold would be suboptimal there).
     """
 
-    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
+    if fpr is None or tpr is None:
+        fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
     figure.add_trace(
         go.Scatter(
             x=fpr,
@@ -863,12 +925,22 @@ def make_theory_roc_figure(
 
     dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
     dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
-    lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
-    grid = np.linspace(lower, upper, resolution)
+    lower, upper, grid, fpr, tpr, _ = _get_analytic_roc_primitives(
+        distribution_type,
+        scale,
+        resolution,
+    )
 
     figure = _new_roc_canvas()
     _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
-    _add_theory_roc_layer(figure, dist_negative, dist_positive, resolution=resolution)
+    _add_theory_roc_layer(
+        figure,
+        dist_negative,
+        dist_positive,
+        resolution=resolution,
+        fpr=fpr,
+        tpr=tpr,
+    )
     _add_random_classifier_layer(figure)
     resolved_title = (
         figure_title
@@ -932,27 +1004,45 @@ def make_empirical_roc_figure(
     if has_theory:
         dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
         dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
-        lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+        lower, upper, grid, theory_fpr, theory_tpr, _ = _get_analytic_roc_primitives(
+            distribution_type,
+            scale,
+            resolution,
+        )
     else:
         lower, upper = _samples_pdf_x_range(samples, labels)
 
     figure = _new_roc_canvas()
     fpr = tpr = None
     if has_theory:
-        grid = np.linspace(lower, upper, resolution)
         _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
-        _add_theory_roc_layer(figure, dist_negative, dist_positive, resolution=resolution)
+        _add_theory_roc_layer(
+            figure,
+            dist_negative,
+            dist_positive,
+            resolution=resolution,
+            fpr=theory_fpr,
+            tpr=theory_tpr,
+        )
     if samples is not None and labels is not None:
         _add_sample_pdf_layer(figure, samples, labels, lower, upper, resolved_histogram_bins)
         scores = _sample_lr_scores(samples, distribution_type, scale)
         fpr, tpr = _add_sample_roc_layer(figure, scores, labels)
     _add_random_classifier_layer(figure)
 
-    title = f"{display_name} distributions: scale={scale:.2f}"
-    if sample_seed is not None:
-        title = f"{title}, samples per class={n_samples}"
+    title = ""
     if compute_epsilon and fpr is not None and tpr is not None:
-        epsilon = compute_epsilon_for_delta(fpr, tpr, resolved_delta)
+        from libdpy.assignment_specific.privacy_auditing.utils import (
+            selected_threshold_from_empirical_roc,
+        )
+
+        samples_neg = samples[labels == 0]
+        samples_pos = samples[labels == 1]
+        tau_star, governing_point, epsilon = selected_threshold_from_empirical_roc(
+            samples_neg,
+            samples_pos,
+            resolved_delta,
+        )
         log_slope = epsilon if np.isfinite(epsilon) else float("inf")
         if np.isfinite(log_slope):
             _add_privacy_bound_layer(
@@ -961,13 +1051,16 @@ def make_empirical_roc_figure(
                 resolved_delta,
                 resolution=resolution,
                 line_color=_EPSILON_FIGURE_BOUND_COLOR,
+                one_sided=True,
             )
-        epsilon_text = _format_epsilon_for_title(epsilon)
-        title = (
-            f"{display_name}: ε = {epsilon_text} at "
-            f"δ = {_format_delta_scientific(resolved_delta)}, scale = {scale:.2g}, "
-            f"samples per class = {n_samples}"
-        )
+            _add_roc_governing_point_layer(
+                figure,
+                fpr,
+                tpr,
+                resolved_delta,
+                tau_star=tau_star,
+                point=governing_point,
+            )
     return _finalize_roc_canvas(figure, title, lower, upper)
 
 
@@ -998,9 +1091,8 @@ def _n_samples_control_spec(n_samples: int) -> ControlSpec:
         default=n_samples,
         min=10,
         max=max(5000, n_samples),
-        step=0.05,
-        continuous=True,
-        slider_scale="log",
+        step=1,
+        continuous=False,
     )
 
 
@@ -1096,6 +1188,8 @@ def _roc_visualizer_layout(
     show_compute_epsilon_toggle: bool,
     below_left_footer: tuple[str, ...] = (),
     below_right_footer_actions: tuple[str, ...] = (),
+    empirical: bool = False,
+    sample_seed_getter: Callable[[], int | None] | None = None,
 ):
     from .interactive_widgets import roc_subplot_control_layout
 
@@ -1108,11 +1202,20 @@ def _roc_visualizer_layout(
         return f"Scale = {_format_scale_readout(float(controls['scale'].value))}"
 
     def privacy_readout(controls: Mapping[str, Any]) -> str:
-        return _theory_privacy_dp_label(
-            _selected_distribution(controls),
-            float(controls["scale"].value),
-            float(controls["delta"].value),
-        )
+        distribution = _selected_distribution(controls)
+        scale = float(controls["scale"].value)
+        delta = float(controls["delta"].value)
+        if empirical:
+            sample_seed = sample_seed_getter() if sample_seed_getter is not None else None
+            n_samples = int(round(float(controls["n_samples"].value)))
+            return _empirical_privacy_dp_label(
+                distribution,
+                scale,
+                delta,
+                n_samples,
+                sample_seed,
+            )
+        return _theory_privacy_dp_label(distribution, scale, delta)
 
     return roc_subplot_control_layout(
         scale_readout=scale_readout,
@@ -1207,6 +1310,7 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         self.selectable_distribution = bool(selectable_distribution)
         self._seed_generator = np.random.default_rng(random_seed)
         self._initial_sample_seed = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
+        self._privacy_state = {"sample_seed": self._initial_sample_seed}
         self._rendered = self.widget()
 
         # Preserve the useful public attributes from the original implementation.
@@ -1224,6 +1328,7 @@ class EmpROCVisualizer(AbstractInteractivePlot):
 
     def _generate_samples_action(self, state, _controls):
         state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
+        self._privacy_state["sample_seed"] = state["sample_seed"]
         return None
 
     def widget(self, **renderer_options):
@@ -1237,6 +1342,8 @@ class EmpROCVisualizer(AbstractInteractivePlot):
                 show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
                 below_left_footer=("n_samples",),
                 below_right_footer_actions=("generate_samples",),
+                empirical=True,
+                sample_seed_getter=lambda: self._privacy_state.get("sample_seed"),
             ),
             **renderer_options,
         )
@@ -1412,6 +1519,84 @@ def _optimal_roc_curve(
     return fpr, tpr
 
 
+_DISTRIBUTION_TYPE_TO_KEY: dict[type[Distribution], str] = {
+    laplace: "laplace",
+    norm: "norm",
+    cauchy: "cauchy",
+    logistic: "logistic",
+}
+
+
+def _distribution_cache_key(distribution_type: type[Distribution]) -> str:
+    if distribution_type is t:
+        return f"student_t:{_EMPIRICAL_ROC_STUDENT_T_DF}"
+    try:
+        return _DISTRIBUTION_TYPE_TO_KEY[distribution_type]
+    except KeyError as error:
+        raise ValueError(f"unsupported distribution type: {distribution_type!r}") from error
+
+
+def _distribution_type_from_cache_key(distribution_key: str) -> type[Distribution]:
+    if distribution_key.startswith("student_t:"):
+        return t
+    mapping: dict[str, type[Distribution]] = {
+        "laplace": laplace,
+        "norm": norm,
+        "cauchy": cauchy,
+        "logistic": logistic,
+    }
+    try:
+        return mapping[distribution_key]
+    except KeyError as error:
+        raise ValueError(f"unsupported distribution cache key: {distribution_key!r}") from error
+
+
+@lru_cache(maxsize=64)
+def _analytic_roc_primitives_cached(
+    distribution_key: str,
+    scale: float,
+    resolution: int,
+) -> tuple[float, float, tuple[float, ...], tuple[float, ...], bool]:
+    """Return ``(lower, upper, fpr, tpr, lr_unbounded)`` for an analytic distribution pair."""
+
+    distribution_type = _distribution_type_from_cache_key(distribution_key)
+    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
+    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
+    lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
+    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
+    lr_unbounded = _likelihood_ratio_unbounded(dist_negative, dist_positive)
+    return (
+        lower,
+        upper,
+        tuple(float(value) for value in fpr),
+        tuple(float(value) for value in tpr),
+        lr_unbounded,
+    )
+
+
+def _get_analytic_roc_primitives(
+    distribution_type: type[Distribution],
+    scale: float,
+    resolution: int,
+) -> tuple[float, float, np.ndarray, np.ndarray, np.ndarray, bool]:
+    """Return cached PDF grid bounds, optimal ROC arrays, and LR-unbounded flag."""
+
+    lower, upper, fpr_tuple, tpr_tuple, lr_unbounded = _analytic_roc_primitives_cached(
+        _distribution_cache_key(distribution_type),
+        scale,
+        resolution,
+    )
+    grid = np.linspace(lower, upper, resolution)
+    return (
+        lower,
+        upper,
+        grid,
+        np.asarray(fpr_tuple, dtype=float),
+        np.asarray(tpr_tuple, dtype=float),
+        lr_unbounded,
+    )
+
+
 def _likelihood_ratio_unbounded(
     dist_negative: Distribution,
     dist_positive: Distribution,
@@ -1430,6 +1615,11 @@ def _likelihood_ratio_unbounded(
     right_llr = dist_positive.logpdf(right_x) - dist_negative.logpdf(right_x)
     left_llr = dist_negative.logpdf(left_x) - dist_positive.logpdf(left_x)
     return bool(right_llr[1] > right_llr[0] + 1e-6 or left_llr[1] > left_llr[0] + 1e-6)
+
+
+# Public aliases for lecture figures and external notebooks.
+optimal_roc_curve = _optimal_roc_curve
+likelihood_ratio_unbounded = _likelihood_ratio_unbounded
 
 
 def _roc_slope_supremum_unbounded(
@@ -1484,33 +1674,167 @@ def _roc_origin_constraints_violated(
     return bool(np.any(zero_tpr) and np.max(fpr[zero_tpr]) > delta + _ROC_RATE_EPS)
 
 
-def _roc_step_min_slope(fpr: np.ndarray, tpr: np.ndarray, delta: float) -> float:
-    """Return the smallest ``m = e^epsilon`` satisfying both DP inequalities on a step ROC."""
+def _roc_step_binding(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, float, float]:
+    """Return ``(min_slope, governing_fpr, governing_tpr)`` for a step ROC at ``delta``."""
 
     min_slope = 0.0
+    governing_fpr = 0.0
+    governing_tpr = float(delta)
+
+    def _consider(slope: float, point_fpr: float, point_tpr: float) -> None:
+        nonlocal min_slope, governing_fpr, governing_tpr
+        if slope > min_slope + _ROC_RATE_EPS:
+            min_slope = slope
+            governing_fpr = point_fpr
+            governing_tpr = point_tpr
+
     positive_fpr = fpr > _ROC_RATE_EPS
     positive_tpr = tpr > _ROC_RATE_EPS
 
     if np.any(positive_fpr):
-        min_slope = max(
-            min_slope,
-            float(np.max((tpr[positive_fpr] - delta) / fpr[positive_fpr])),
-        )
+        slopes = (tpr[positive_fpr] - delta) / fpr[positive_fpr]
+        best = int(np.argmax(slopes))
+        fpr_values = fpr[positive_fpr]
+        tpr_values = tpr[positive_fpr]
+        _consider(float(slopes[best]), float(fpr_values[best]), float(tpr_values[best]))
     if np.any(positive_tpr):
-        min_slope = max(
-            min_slope,
-            float(np.max((fpr[positive_tpr] - delta) / tpr[positive_tpr])),
-        )
+        slopes = (fpr[positive_tpr] - delta) / tpr[positive_tpr]
+        best = int(np.argmax(slopes))
+        fpr_values = fpr[positive_tpr]
+        tpr_values = tpr[positive_tpr]
+        _consider(float(slopes[best]), float(fpr_values[best]), float(tpr_values[best]))
 
     for index in range(1, len(fpr)):
         f0, t0 = float(fpr[index - 1]), float(tpr[index - 1])
         f1, t1 = float(fpr[index]), float(tpr[index])
         if f1 > f0 + _ROC_RATE_EPS and t0 > _ROC_RATE_EPS:
-            min_slope = max(min_slope, (f1 - delta) / t0)
+            _consider((f1 - delta) / t0, f1, t0)
         if t1 > t0 + _ROC_RATE_EPS and f1 > _ROC_RATE_EPS:
-            min_slope = max(min_slope, (t1 - delta) / f1)
+            _consider((t1 - delta) / f1, f1, t1)
 
-    return min_slope
+    return min_slope, governing_fpr, governing_tpr
+
+
+def _reflect_roc_through_antidiagonal(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reflect a ROC through the anti-diagonal: ``(FPR, TPR) -> (1 - TPR, 1 - FPR)``.
+
+    The DP inequality that binds near ``(1, 1)`` (the curve's "top half") is exactly the
+    origin-side inequality of this reflection, so the top half can be evaluated by the same
+    origin-side machinery applied to the reflected curve. A symmetric ROC reflects onto
+    itself, so its two halves already agree; an asymmetric (sampled) ROC does not, which is
+    why the top half must be checked separately. Points are reversed so ``FPR`` ascends.
+    """
+
+    reflected_fpr = np.ascontiguousarray((1.0 - tpr)[::-1])
+    reflected_tpr = np.ascontiguousarray((1.0 - fpr)[::-1])
+    return reflected_fpr, reflected_tpr
+
+
+def _roc_step_binding_point(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, tuple[float, float] | None]:
+    """Return the exact step binding as ``(min_slope, governing_point | None)``."""
+
+    min_slope, governing_fpr, governing_tpr = _roc_step_binding(fpr, tpr, delta)
+    if min_slope <= _ROC_RATE_EPS:
+        return min_slope, None
+    return min_slope, (governing_fpr, governing_tpr)
+
+
+def _bottom_half_binding(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, tuple[float, float] | None]:
+    """Return ``(min_slope, governing_point)`` for the DP inequality binding near ``(0, 0)``.
+
+    ``min_slope`` is ``inf`` when no finite slope bounds the steep rise out of the origin
+    (e.g. a Gaussian ROC at ``delta = 0``); the slope-supremum detectors recognise that
+    divergence on a smoothly sampled analytic curve.
+    """
+
+    if (
+        _roc_origin_constraints_violated(fpr, tpr, delta)
+        or _roc_slope_supremum_unbounded(fpr, tpr, delta)
+        or _roc_inverse_slope_supremum_unbounded(fpr, tpr, delta)
+    ):
+        return float("inf"), None
+    return _roc_step_binding_point(fpr, tpr, delta)
+
+
+def _top_half_binding(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, tuple[float, float] | None]:
+    """Return ``(min_slope, governing_point)`` for the DP inequality binding near ``(1, 1)``.
+
+    Evaluated as the origin-side binding of the anti-diagonal reflection. Only the exact
+    axis-touching infinity check is applied: a finite step ROC reaches an infinite slope
+    only by touching an axis inside the ``(eps, delta)`` strip, whereas the smooth-curve
+    slope-supremum heuristics misfire on a finite step reflection (they read a merely
+    decreasing-toward-the-corner slope as a divergence). The governing point is mapped back
+    to the original ROC coordinates.
+    """
+
+    reflected_fpr, reflected_tpr = _reflect_roc_through_antidiagonal(fpr, tpr)
+    if _roc_origin_constraints_violated(reflected_fpr, reflected_tpr, delta):
+        return float("inf"), None
+    min_slope, reflected_point = _roc_step_binding_point(reflected_fpr, reflected_tpr, delta)
+    if reflected_point is None:
+        return min_slope, None
+    return min_slope, (1.0 - reflected_point[1], 1.0 - reflected_point[0])
+
+
+def _roc_dp_step_binding(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, tuple[float, float] | None]:
+    """Return ``(min_slope, governing_point)`` enforcing both halves of the ROC.
+
+    The bottom-half binding alone ignores the symmetric DP inequality that binds near
+    ``(1, 1)`` -- harmless for a symmetric ROC but not for an asymmetric (sampled) one. We
+    keep whichever half demands the larger slope.
+    """
+
+    bottom_slope, bottom_point = _bottom_half_binding(fpr, tpr, delta)
+    top_slope, top_point = _top_half_binding(fpr, tpr, delta)
+    if top_slope > bottom_slope:
+        return top_slope, top_point
+    return bottom_slope, bottom_point
+
+
+def find_roc_governing_point(
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+) -> tuple[float, float] | None:
+    """Return the ROC point that sets the tightest ``(epsilon, delta)`` slope, if any."""
+
+    if not 0 <= delta <= 1:
+        raise ValueError("delta must be between 0 and 1")
+
+    fpr = np.asarray(fpr, dtype=float)
+    tpr = np.asarray(tpr, dtype=float)
+    if fpr.shape != tpr.shape:
+        raise ValueError("fpr and tpr must have the same shape")
+    if len(fpr) == 0:
+        raise ValueError("fpr and tpr must not be empty")
+
+    min_slope, governing_point = _roc_dp_step_binding(fpr, tpr, delta)
+    if not np.isfinite(min_slope) or min_slope <= _ROC_RATE_EPS:
+        return None
+    return governing_point
 
 
 def compute_min_log_slope_for_roc(
@@ -1530,14 +1854,9 @@ def compute_min_log_slope_for_roc(
     if len(fpr) == 0:
         raise ValueError("fpr and tpr must not be empty")
 
-    if _roc_origin_constraints_violated(fpr, tpr, delta):
+    min_slope, _ = _roc_dp_step_binding(fpr, tpr, delta)
+    if not np.isfinite(min_slope):
         return float("inf")
-    if _roc_slope_supremum_unbounded(fpr, tpr, delta):
-        return float("inf")
-    if _roc_inverse_slope_supremum_unbounded(fpr, tpr, delta):
-        return float("inf")
-
-    min_slope = _roc_step_min_slope(fpr, tpr, delta)
     if min_slope <= _ROC_RATE_EPS:
         return 0.0
     return float(np.log(min_slope))
@@ -1633,15 +1952,49 @@ def _theory_privacy_dp_label(
     if distribution_type is None:
         raise ValueError(f"{distribution} has no closed-form density")
 
-    dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
-    dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
-    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
-    epsilon = optimal_roc_epsilon_for_delta(
-        fpr,
-        tpr,
-        delta,
-        lr_unbounded=_likelihood_ratio_unbounded(dist_negative, dist_positive),
+    _, _, _, fpr, tpr, lr_unbounded = _get_analytic_roc_primitives(
+        distribution_type,
+        scale,
+        resolution,
     )
+    if delta <= 0 and lr_unbounded:
+        epsilon = float("inf")
+    else:
+        from libdpy.assignment_specific.privacy_auditing.utils import (
+            one_sided_epsilon_from_roc_points,
+        )
+
+        epsilon, _ = one_sided_epsilon_from_roc_points(fpr, tpr, delta)
+    return _format_privacy_dp_label(epsilon, delta)
+
+
+def _empirical_privacy_dp_label(
+    distribution: str,
+    scale: float,
+    delta: float,
+    n_samples: int,
+    sample_seed: int | None,
+) -> str:
+    """Compute the ``(epsilon, delta)-DP`` label from the current empirical ROC sample."""
+
+    if sample_seed is None or n_samples <= 0:
+        return ""
+    display_name, distribution_type = _empirical_distribution(distribution)
+    samples, labels = _generate_empirical_roc_samples(
+        display_name,
+        scale,
+        n_samples,
+        sample_seed,
+    )
+    scores = _sample_lr_scores(samples, distribution_type, scale)
+    fpr, tpr = _empirical_roc_points(labels, scores)
+    samples_neg = samples[labels == 0]
+    samples_pos = samples[labels == 1]
+    from libdpy.assignment_specific.privacy_auditing.utils import (
+        selected_threshold_from_empirical_roc,
+    )
+
+    _, _, epsilon = selected_threshold_from_empirical_roc(samples_neg, samples_pos, delta)
     return _format_privacy_dp_label(epsilon, delta)
 
 
@@ -1684,8 +2037,12 @@ def _add_privacy_bound_layer(
     *,
     resolution: int,
     line_color: str = "blue",
+    one_sided: bool = False,
 ) -> None:
-    bound_x, bound_y = calc_privacy_bound(log_slope, delta, resolution)
+    if one_sided:
+        bound_x, bound_y = one_sided_privacy_bound(log_slope, delta, resolution)
+    else:
+        bound_x, bound_y = calc_privacy_bound(log_slope, delta, resolution)
     figure.add_trace(
         go.Scatter(
             x=bound_x,
@@ -1693,6 +2050,65 @@ def _add_privacy_bound_layer(
             mode="lines",
             name="(ε, δ) bound",
             line={"color": line_color, "width": 3},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+
+
+def _format_tau_star_legend(tau_star: float) -> str:
+    if not math.isfinite(tau_star):
+        return "ε-governing point"
+    return f"ε-governing point (τ★={tau_star:.3g})"
+
+
+def _add_roc_governing_point_layer(
+    figure: go.Figure,
+    fpr: np.ndarray,
+    tpr: np.ndarray,
+    delta: float,
+    *,
+    samples_neg: np.ndarray | None = None,
+    samples_pos: np.ndarray | None = None,
+    tau_star: float | None = None,
+    point: tuple[float, float] | None = None,
+) -> None:
+    """Mark the ROC point used for the lecture's one-sided compute-ε step."""
+
+    if point is not None:
+        point_fpr, point_tpr = point
+        trace_name = _format_tau_star_legend(float("nan") if tau_star is None else tau_star)
+    elif samples_neg is not None and samples_pos is not None:
+        from libdpy.assignment_specific.privacy_auditing.utils import (
+            selected_threshold_from_empirical_roc,
+        )
+
+        tau_star, (point_fpr, point_tpr), _ = selected_threshold_from_empirical_roc(
+            samples_neg,
+            samples_pos,
+            delta,
+        )
+        trace_name = _format_tau_star_legend(tau_star)
+    else:
+        governing_point = find_roc_governing_point(fpr, tpr, delta)
+        if governing_point is None:
+            return
+        point_fpr, point_tpr = governing_point
+        trace_name = "ε-governing point"
+
+    figure.add_trace(
+        go.Scatter(
+            x=[point_fpr],
+            y=[point_tpr],
+            mode="markers",
+            name=trace_name,
+            marker={
+                "symbol": "circle-open",
+                "size": 14,
+                "color": _EPSILON_FIGURE_BOUND_COLOR,
+                "line": {"width": 3, "color": _EPSILON_FIGURE_BOUND_COLOR},
+            },
             legend="legend2",
         ),
         row=1,
@@ -1725,16 +2141,20 @@ def make_epsilon_from_delta_figure(
 
     dist_negative = _make_empirical_roc_dist(distribution_type, loc=0, scale=scale)
     dist_positive = _make_empirical_roc_dist(distribution_type, loc=1, scale=scale)
-    lower, upper = _empirical_roc_pdf_x_range(dist_negative, dist_positive)
-    grid = np.linspace(lower, upper, resolution)
-
-    fpr, tpr = _optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
-    epsilon = optimal_roc_epsilon_for_delta(
-        fpr,
-        tpr,
-        delta,
-        lr_unbounded=_likelihood_ratio_unbounded(dist_negative, dist_positive),
+    lower, upper, grid, fpr, tpr, lr_unbounded = _get_analytic_roc_primitives(
+        distribution_type,
+        scale,
+        resolution,
     )
+
+    if delta <= 0 and lr_unbounded:
+        epsilon = float("inf")
+    else:
+        from libdpy.assignment_specific.privacy_auditing.utils import (
+            one_sided_epsilon_from_roc_points,
+        )
+
+        epsilon, _ = one_sided_epsilon_from_roc_points(fpr, tpr, delta)
     log_slope = epsilon if np.isfinite(epsilon) else float("inf")
 
     figure = _new_roc_canvas()
@@ -1761,6 +2181,7 @@ def make_epsilon_from_delta_figure(
             delta,
             resolution=resolution,
             line_color=_EPSILON_FIGURE_BOUND_COLOR,
+            one_sided=True,
         )
     _add_random_classifier_layer(figure)
 
@@ -1832,7 +2253,17 @@ def make_empirical_epsilon_from_delta_figure(
         row=1,
         col=2,
     )
-    epsilon = compute_epsilon_for_delta(fpr, tpr, delta)
+    samples_neg = samples[labels == 0]
+    samples_pos = samples[labels == 1]
+    from libdpy.assignment_specific.privacy_auditing.utils import (
+        selected_threshold_from_empirical_roc,
+    )
+
+    tau_star, governing_point, epsilon = selected_threshold_from_empirical_roc(
+        samples_neg,
+        samples_pos,
+        delta,
+    )
     log_slope = epsilon if np.isfinite(epsilon) else float("inf")
     if np.isfinite(log_slope):
         _add_privacy_bound_layer(
@@ -1841,20 +2272,19 @@ def make_empirical_epsilon_from_delta_figure(
             delta,
             resolution=resolution,
             line_color=_EPSILON_FIGURE_BOUND_COLOR,
+            one_sided=True,
+        )
+        _add_roc_governing_point_layer(
+            figure,
+            fpr,
+            tpr,
+            delta,
+            tau_star=tau_star,
+            point=governing_point,
         )
     _add_random_classifier_layer(figure)
 
-    epsilon_text = _format_epsilon_for_title(epsilon)
-    return _finalize_roc_canvas(
-        figure,
-        (
-            f"{display_name} (empirical): ε = {epsilon_text} at "
-            f"δ = {_format_delta_scientific(delta)}, scale = {scale:.2g}, "
-            f"samples per class = {n_samples}"
-        ),
-        lower,
-        upper,
-    )
+    return _finalize_roc_canvas(figure, "", lower, upper)
 
 
 class TheoryROCVisualizer(AbstractInteractivePlot):
@@ -1992,7 +2422,7 @@ class EpsilonFromDeltaVisualizer(TheoryROCVisualizer):
 
 
 class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
-    """Backward-compatible alias for ``EmpROCVisualizer`` with epsilon mode enabled."""
+    """Empirical ROC explorer with the compute-ε toggle exposed (off by default)."""
 
     def __init__(
         self,
@@ -2010,8 +2440,8 @@ class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
             distribution=distribution,
             scale=scale,
             delta=delta,
-            compute_epsilon=True,
-            show_compute_epsilon_toggle=False,
+            compute_epsilon=False,
+            show_compute_epsilon_toggle=True,
             selectable_distribution=selectable_distribution,
             random_seed=random_seed,
             auto_display=auto_display,

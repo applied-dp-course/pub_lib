@@ -1,4 +1,3 @@
-import random
 from typing import Dict
 
 import numpy as np
@@ -42,8 +41,9 @@ def plot_confusion_matrixes(confusion_matrix_train, confusion_matrix_test, class
 
 
 def plot_binned_classification_grid(
-    data_by_class_and_bin, num_samples, probability_bins=[0, 0.5, 0.75, 0.9, 1]
+    data_by_class_and_bin, num_samples, probability_bins=[0, 0.5, 0.75, 0.9, 1], seed=None
 ):
+    rng = np.random.default_rng(seed)
     num_classes = len(data_by_class_and_bin)
     num_bins = len(probability_bins) - 1
     data_dim = int(np.sqrt(data_by_class_and_bin[0][0].shape[1]))
@@ -75,7 +75,7 @@ def plot_binned_classification_grid(
 
                 if len(bin_data) > 0:
                     indices = list(range(len(bin_data)))
-                    random.shuffle(indices)
+                    rng.shuffle(indices)
                     selected_indices = indices[:num_samples]
                     selected_samples = bin_data[selected_indices, : data_dim**2]
 

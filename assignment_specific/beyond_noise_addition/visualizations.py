@@ -86,14 +86,17 @@ def plot_results(Binary_search_estimate, Naive_Noise_addition_estimate, ReportNo
     plt.show()
 
 
-def create_plot(values, epsilon):
+def create_plot(values, epsilon, seed=None):
     """
     Create a plot with exponential noise addition
 
     Parameters:
     values (list): Original values to visualize
     epsilon (float): Privacy parameter for noise generation
+    seed (int | None): Optional seed for deterministic noise.
     """
+    rng = np.random.default_rng(seed)
+
     # Create the figure with white background
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(10, 6), facecolor='white')
@@ -101,7 +104,7 @@ def create_plot(values, epsilon):
 
     # Generate exponential noise with standard deviation = 2/epsilon
     # Note: numpy's exponential is one-sided, so we'll use a two-sided approach
-    noise = np.random.exponential(scale=2 / epsilon, size=len(values))
+    noise = rng.exponential(scale=2 / epsilon, size=len(values))
 
     noisy_values = np.array(values) + noise
 

@@ -14,8 +14,9 @@ from libdpy.attacks.membership_inference.classical_auditing_utils import thresho
 
 
 def one_run_auditing_experiement(
-    labeled_data, score_func, parameters_to_loop_over, error_prob, delta
+    labeled_data, score_func, parameters_to_loop_over, error_prob, delta, seed=None
 ):
+    rng = np.random.default_rng(seed)
     all_results = pd.DataFrame(
         columns=[
             'subset_size',
@@ -31,7 +32,7 @@ def one_run_auditing_experiement(
             'acc_labeled_test',
         ]
     )
-    synthetic_data = generate_adversarial_patterns(num_samples=2048)
+    synthetic_data = generate_adversarial_patterns(num_samples=2048, seed=rng)
 
     for subset_size, noise_factor, batch_size, num_epochs, learning_rate, clipping_radius in zip(
         parameters_to_loop_over['subset_size_vec'],
@@ -68,6 +69,7 @@ def one_run_auditing_experiement(
                 subset_size,
                 error_prob,
                 delta,
+                rng=rng,
             )
         )
         new_row = {
@@ -88,7 +90,14 @@ def one_run_auditing_experiement(
 
 
 def one_run_auditing(
-    labeled_data, synthetic_data, FC_model_generator, score_func, subset_size, error_prob, delta
+    labeled_data,
+    synthetic_data,
+    FC_model_generator,
+    score_func,
+    subset_size,
+    error_prob,
+    delta,
+    rng: np.random.Generator | None = None,
 ):
     (
         scores_neg,
@@ -98,7 +107,7 @@ def one_run_auditing(
         acc_labeled_train,
         acc_labeled_test,
     ) = randomize_train_and_return_score(
-        labeled_data, synthetic_data, FC_model_generator, score_func, subset_size
+        labeled_data, synthetic_data, FC_model_generator, score_func, subset_size, rng=rng
     )
     score_vec = np.sort(np.concatenate((scores_neg, scores_pos)))
     # compute the values in score_vec such that 100 datapoint are strictly smaller than it, another value that 100 are strictly larger than it
@@ -119,9 +128,11 @@ def one_run_auditing(
     return eps, acc_synthetic_train, acc_synthetic_test, acc_labeled_train, acc_labeled_test
 
 
-def generate_adversarial_patterns(num_samples):
+def generate_adversarial_patterns(num_samples, seed=None):
     import numpy as np
     from scipy.ndimage import rotate
+
+    rng = np.random.default_rng(seed)
 
     images = []
     seen_patterns = set()
@@ -131,8 +142,8 @@ def generate_adversarial_patterns(num_samples):
 
     def create_checkerboard_pattern(frequency=2, random_offset=True):
         img = np.zeros((28, 28))
-        offset_x = np.random.randint(0, frequency) if random_offset else 0
-        offset_y = np.random.randint(0, frequency) if random_offset else 0
+        offset_x = rng.integers(0, frequency) if random_offset else 0
+        offset_y = rng.integers(0, frequency) if random_offset else 0
         for i in range(28):
             for j in range(28):
                 if ((i + offset_x) + (j + offset_y)) % frequency == 0:
@@ -141,7 +152,7 @@ def generate_adversarial_patterns(num_samples):
 
     def create_sparse_pattern(num_pixels=5, cluster_size=2):
         img = np.zeros((28, 28))
-        center_positions = np.random.choice(28 * 28, num_pixels, replace=False)
+        center_positions = rng.choice(28 * 28, num_pixels, replace=False)
         for pos in center_positions:
             i, j = pos // 28, pos % 28
             # Create small clusters around each point
@@ -149,7 +160,7 @@ def generate_adversarial_patterns(num_samples):
                 for dj in range(-cluster_size, cluster_size + 1):
                     ni, nj = i + di, j + dj
                     if (
-                        0 <= ni < 28 and 0 <= nj < 28 and np.random.random() < 0.7
+                        0 <= ni < 28 and 0 <= nj < 28 and rng.random() < 0.7
                     ):  # 70% chance to fill
                         img[ni, nj] = 1
         return img
@@ -159,8 +170,8 @@ def generate_adversarial_patterns(num_samples):
         center = (14, 14)
         for _ in range(num_points):
             # Generate point in first quadrant
-            x = np.random.randint(0, 14)
-            y = np.random.randint(0, 14)
+            x = rng.integers(0, 14)
+            y = rng.integers(0, 14)
             # Mirror across all quadrants
             points = [
                 (center[0] + x, center[1] + y),
@@ -191,9 +202,9 @@ def generate_adversarial_patterns(num_samples):
 
     def create_periodic_pattern():
         img = np.zeros((28, 28))
-        frequency_x = np.random.uniform(0.5, 2.0)
-        frequency_y = np.random.uniform(0.5, 2.0)
-        phase = np.random.uniform(0, 2 * np.pi)
+        frequency_x = rng.uniform(0.5, 2.0)
+        frequency_y = rng.uniform(0.5, 2.0)
+        phase = rng.uniform(0, 2 * np.pi)
         for i in range(28):
             for j in range(28):
                 if np.sin(frequency_x * i + phase) * np.cos(frequency_y * j) > 0:
@@ -202,23 +213,23 @@ def generate_adversarial_patterns(num_samples):
 
     def create_random_walk(steps=100):
         img = np.zeros((28, 28))
-        x, y = np.random.randint(0, 28), np.random.randint(0, 28)
+        x, y = rng.integers(0, 28), rng.integers(0, 28)
         for _ in range(steps):
             img[int(x), int(y)] = 1
-            dx, dy = np.random.choice([-1, 0, 1], 2)
+            dx, dy = rng.choice([-1, 0, 1], 2)
             x = np.clip(x + dx, 0, 27)
             y = np.clip(y + dy, 0, 27)
         return img
 
     def apply_random_transformation(img):
         # Randomly rotate
-        angle = np.random.uniform(0, 360)
+        angle = rng.uniform(0, 360)
         img = rotate(img, angle, reshape=False)
 
         # Randomly flip
-        if np.random.random() > 0.5:
+        if rng.random() > 0.5:
             img = np.fliplr(img)
-        if np.random.random() > 0.5:
+        if rng.random() > 0.5:
             img = np.flipud(img)
 
         # Threshold to ensure binary image
@@ -231,14 +242,14 @@ def generate_adversarial_patterns(num_samples):
 
     # Define base pattern generators
     pattern_generators = [
-        lambda: create_checkerboard_pattern(frequency=np.random.randint(2, 6), random_offset=True),
+        lambda: create_checkerboard_pattern(frequency=rng.integers(2, 6), random_offset=True),
         lambda: create_sparse_pattern(
-            num_pixels=np.random.randint(3, 8), cluster_size=np.random.randint(1, 4)
+            num_pixels=rng.integers(3, 8), cluster_size=rng.integers(1, 4)
         ),
-        lambda: create_symmetric_pattern(num_points=np.random.randint(2, 6)),
-        lambda: create_fractal_pattern(depth=np.random.randint(2, 4)),
+        lambda: create_symmetric_pattern(num_points=rng.integers(2, 6)),
+        lambda: create_fractal_pattern(depth=rng.integers(2, 4)),
         lambda: create_periodic_pattern(),
-        lambda: create_random_walk(steps=np.random.randint(50, 150)),
+        lambda: create_random_walk(steps=rng.integers(50, 150)),
         lambda: apply_random_transformation(create_checkerboard_pattern()),
         lambda: apply_random_transformation(create_symmetric_pattern()),
     ]
@@ -249,14 +260,16 @@ def generate_adversarial_patterns(num_samples):
     # Generate patterns by randomly selecting generators
     while len(images) < num_samples:
         # Randomly choose a pattern generator
-        generator = np.random.choice(pattern_generators)
+        generator = pattern_generators[rng.integers(len(pattern_generators))]
         img = generator()
         img_hash = hash_image(img)
 
         if img_hash in seen_patterns:
             # Generate a new pattern until we get a unique one
             while img_hash in seen_patterns:
-                generator = np.random.choice(pattern_generators)  # Choose a new random generator
+                generator = pattern_generators[
+                    rng.integers(len(pattern_generators))
+                ]  # Choose a new random generator
                 img = generator()
                 img_hash = hash_image(img)
 
@@ -265,15 +278,22 @@ def generate_adversarial_patterns(num_samples):
 
     # Convert to numpy array and assign random labels
     images = np.array(images)
-    labels = np.random.choice([0, 1], size=len(images))
+    labels = rng.choice([0, 1], size=len(images))
     return {'data': images, 'labels': labels}
 
 
 def randomize_train_and_return_score(
-    labeled_data, synthetic_data, FC_model_generator, score_func, subset_size
+    labeled_data,
+    synthetic_data,
+    FC_model_generator,
+    score_func,
+    subset_size,
+    rng: np.random.Generator | None = None,
 ):
-    labeled_data = shuffle_data(labeled_data)
-    synthetic_data = shuffle_data(synthetic_data)
+    if rng is None:
+        rng = np.random.default_rng()
+    labeled_data = shuffle_data(labeled_data, rng=rng)
+    synthetic_data = shuffle_data(synthetic_data, rng=rng)
 
     # train-test split
     labeled_data_train = {

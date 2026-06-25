@@ -233,18 +233,21 @@ def plot_convergence_to_normal(
     plt.show()
 
 
-def plot_sample_means_distribution(num_experiments=1000, sample_size=30, population_dist='uniform'):
+def plot_sample_means_distribution(
+    num_experiments=1000, sample_size=30, population_dist='uniform', seed=None
+):
+    rng = np.random.default_rng(seed)
     sample_means = []
 
     for _ in range(num_experiments):
         if population_dist == 'uniform':
-            sample = np.random.uniform(-3, 8, sample_size)
+            sample = rng.uniform(-3, 8, sample_size)
         elif population_dist == 'exponential':
-            sample = np.random.exponential(2, sample_size)
+            sample = rng.exponential(2, sample_size)
         elif population_dist == 'binomial':
-            sample = np.random.binomial(10, 0.3, sample_size)
+            sample = rng.binomial(10, 0.3, sample_size)
         else:
-            sample = np.random.normal(0, 1, sample_size)
+            sample = rng.normal(0, 1, sample_size)
 
         sample_means.append(np.mean(sample))
 

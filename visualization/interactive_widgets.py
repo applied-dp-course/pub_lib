@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from html import escape
-from typing import Any, MutableMapping
+from typing import Any
 
 import ipywidgets as widgets
+import numpy as np
 import plotly.graph_objects as go
+from plotly.basedatatypes import BasePlotlyType
 
 from .interactive import ActionSpec, ControlSpec, InteractiveSpec
 
@@ -133,14 +136,147 @@ def _capture_plotly_ui_state(figure: go.FigureWidget) -> dict[str, Any]:
     return state
 
 
-def replace_figure_widget(
+def _trace_structure_signature(trace: go.BaseTraceType) -> tuple[Any, ...]:
+    """Trace role for structure checks (exclude data-derived ``name`` labels)."""
+
+    return (
+        trace.__class__.__name__,
+        getattr(trace, "xaxis", None),
+        getattr(trace, "yaxis", None),
+        getattr(trace, "legend", None),
+        getattr(trace, "legendgroup", None),
+    )
+
+
+def _figures_share_structure(source: go.Figure, target: go.FigureWidget) -> bool:
+    if len(source.data) != len(target.data):
+        return False
+    return all(
+        _trace_structure_signature(source_trace) == _trace_structure_signature(target_trace)
+        for source_trace, target_trace in zip(source.data, target.data)
+    )
+
+
+def _plotly_values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, dict) and isinstance(right, dict):
+        if set(left) != set(right):
+            return False
+        return all(_plotly_values_equal(left[key], right[key]) for key in left)
+    left_is_seq = isinstance(left, (list, tuple, np.ndarray))
+    right_is_seq = isinstance(right, (list, tuple, np.ndarray))
+    if left_is_seq or right_is_seq:
+        if not (left_is_seq and right_is_seq):
+            return False
+        left_arr = np.asarray(left)
+        right_arr = np.asarray(right)
+        if left_arr.shape != right_arr.shape:
+            return False
+        # Numeric arrays compare with equal_nan; string/object arrays (e.g. categorical
+        # axis labels) need plain array_equal, which always returns a scalar bool.
+        if left_arr.dtype.kind in "biufc" and right_arr.dtype.kind in "biufc":
+            return bool(np.array_equal(left_arr, right_arr, equal_nan=True))
+        return bool(np.array_equal(left_arr, right_arr))
+    # Scalar fallback: coerce any stray array result (e.g. a 0-d array) to a bool.
+    result = left == right
+    if isinstance(result, np.ndarray):
+        return bool(result.all())
+    return bool(result)
+
+
+_SKIP_TRACE_KEYS = frozenset({"uid", "type", "meta", "frame"})
+
+
+def _is_plotly_compound(obj: Any) -> bool:
+    """Whether ``obj`` is a Plotly compound (so we can patch leaf properties on it).
+
+    The recursion guard must NOT use ``hasattr(obj, "keys")``: Plotly compound
+    objects (axes, markers, lines, ...) do not implement ``keys``. Replacing a whole
+    sub-object instead of patching the changed leaf makes the FigureWidget transmit
+    every property of that sub-object — and any property with a ``'plot'`` edit type
+    (e.g. ``xaxis.domain``) forces Plotly to replot the entire figure, repainting all
+    subplot backgrounds even though only one leaf (e.g. ``xaxis.range``) changed.
+    """
+
+    return isinstance(obj, BasePlotlyType)
+
+
+def _assign_plotly_property(target: Any, key: str, source_value: Any, target_value: Any) -> None:
+    if _plotly_values_equal(source_value, target_value):
+        return
+    if isinstance(source_value, dict):
+        child = getattr(target, key, None)
+        if _is_plotly_compound(child):
+            for subkey, subvalue in source_value.items():
+                current = child[subkey] if subkey in child else None
+                if not _plotly_values_equal(subvalue, current):
+                    _assign_plotly_property(child, subkey, subvalue, current)
+            return
+    target[key] = source_value
+
+
+def _apply_trace_diff(target_trace: go.BaseTraceType, source_trace: go.BaseTraceType) -> None:
+    source_json = source_trace.to_plotly_json()
+    target_json = target_trace.to_plotly_json()
+    for key, source_value in source_json.items():
+        if key in _SKIP_TRACE_KEYS:
+            continue
+        _assign_plotly_property(target_trace, key, source_value, target_json.get(key))
+
+
+def _apply_nested_layout_diff(
+    target: Any,
+    source_value: Mapping[str, Any],
+    last_value: Mapping[str, Any],
+) -> None:
+    for key in set(source_value) | set(last_value):
+        source_item = source_value.get(key)
+        last_item = last_value.get(key)
+        if isinstance(source_item, dict) and isinstance(last_item, dict):
+            if not _plotly_values_equal(source_item, last_item):
+                child = getattr(target, key, None)
+                if _is_plotly_compound(child):
+                    _apply_nested_layout_diff(child, source_item, last_item)
+                else:
+                    setattr(target, key, copy.deepcopy(source_item))
+            continue
+        if not _plotly_values_equal(source_item, last_item):
+            setattr(target, key, copy.deepcopy(source_item))
+
+
+def _apply_layout_diff(
+    target_layout: go.Layout,
+    source_layout: Mapping[str, Any],
+    last_factory_layout: Mapping[str, Any],
+) -> None:
+    for key in set(source_layout) | set(last_factory_layout):
+        source_value = source_layout.get(key)
+        last_value = last_factory_layout.get(key)
+        if isinstance(source_value, dict) and isinstance(last_value, dict):
+            if not _plotly_values_equal(source_value, last_value):
+                target_attr = getattr(target_layout, key, None)
+                if _is_plotly_compound(target_attr):
+                    _apply_nested_layout_diff(target_attr, source_value, last_value)
+                else:
+                    setattr(target_layout, key, copy.deepcopy(source_value))
+            continue
+        if not _plotly_values_equal(source_value, last_value):
+            setattr(target_layout, key, copy.deepcopy(source_value))
+
+
+def _restore_plotly_ui_state(target: go.FigureWidget, ui_state: Mapping[str, Any]) -> None:
+    for key, value in ui_state.items():
+        scene_name, _, property_name = key.partition(".")
+        scene = getattr(target.layout, scene_name, None)
+        if scene is not None and property_name == "camera":
+            scene.camera = value
+
+
+def _replace_figure_widget_full(
     target: go.FigureWidget,
     source: go.Figure,
     *,
     preserve_ui_state: bool = True,
 ) -> None:
-    """Replace a FigureWidget's complete figure while preserving useful UI state."""
-
     ui_state = _capture_plotly_ui_state(target) if preserve_ui_state else {}
     with target.batch_update():
         target.data = []
@@ -150,11 +286,57 @@ def replace_figure_widget(
             target.frames = source.frames
         except (AttributeError, ValueError):
             pass
-        for key, value in ui_state.items():
-            scene_name, _, property_name = key.partition(".")
-            scene = getattr(target.layout, scene_name, None)
-            if scene is not None and property_name == "camera":
-                scene.camera = value
+        _restore_plotly_ui_state(target, ui_state)
+
+
+def _update_figure_widget_in_place(
+    target: go.FigureWidget,
+    source: go.Figure,
+    last_factory_layout: MutableMapping[str, Any],
+    *,
+    preserve_ui_state: bool = True,
+) -> None:
+    ui_state = _capture_plotly_ui_state(target) if preserve_ui_state else {}
+    source_layout = source.layout.to_plotly_json()
+    with target.batch_update():
+        for source_trace, target_trace in zip(source.data, target.data):
+            _apply_trace_diff(target_trace, source_trace)
+        _apply_layout_diff(target.layout, source_layout, last_factory_layout)
+        try:
+            target.frames = source.frames
+        except (AttributeError, ValueError):
+            pass
+        _restore_plotly_ui_state(target, ui_state)
+    last_factory_layout.clear()
+    last_factory_layout.update(copy.deepcopy(source_layout))
+
+
+def replace_figure_widget(
+    target: go.FigureWidget,
+    source: go.Figure,
+    *,
+    preserve_ui_state: bool = True,
+    last_factory_layout: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Replace or incrementally update a FigureWidget from a freshly built figure.
+
+    When ``last_factory_layout`` is supplied and trace structure is unchanged,
+    only changed trace properties and layout keys are patched in place.
+    """
+
+    if last_factory_layout is not None and _figures_share_structure(source, target):
+        _update_figure_widget_in_place(
+            target,
+            source,
+            last_factory_layout,
+            preserve_ui_state=preserve_ui_state,
+        )
+        return
+
+    _replace_figure_widget_full(target, source, preserve_ui_state=preserve_ui_state)
+    if last_factory_layout is not None:
+        last_factory_layout.clear()
+        last_factory_layout.update(copy.deepcopy(source.layout.to_plotly_json()))
 
 
 def _full_width_slider(slider: widgets.Widget) -> widgets.Widget:
@@ -213,9 +395,14 @@ def _column_box(child_widgets: Sequence[widgets.Widget]) -> widgets.Widget:
 
 
 def _distribution_title_html(name: str) -> str:
+    lowered = name.lower().rstrip()
+    if lowered.endswith("distribution") or lowered.endswith("distributions"):
+        label = name
+    else:
+        label = f"{name} distribution"
     return (
         f'<div style="text-align:center;font-size:1.35rem;font-weight:600;'
-        f'margin:6px 0 4px;width:100%;">{escape(name)} distribution</div>'
+        f'margin:6px 0 4px;width:100%;">{escape(label)}</div>'
     )
 
 
@@ -373,7 +560,7 @@ def roc_subplot_control_layout(
             privacy_label.value = _readout_html(text)
             _set_widget_shown(privacy_label, True)
 
-        for name in ("compute_epsilon", "scale", "delta", "distribution"):
+        for name in ("compute_epsilon", "scale", "delta", "distribution", "n_samples"):
             if name in controls:
                 controls[name].observe(sync_readouts, names="value")
         sync_readouts()
@@ -454,6 +641,7 @@ def render_ipywidgets(
         return figure
 
     figure_widget = go.FigureWidget(make_figure())
+    last_factory_layout: dict[str, Any] = copy.deepcopy(figure_widget.layout.to_plotly_json())
 
     def update() -> None:
         try:
@@ -468,6 +656,7 @@ def render_ipywidgets(
             figure_widget,
             updated,
             preserve_ui_state=preserve_ui_state,
+            last_factory_layout=last_factory_layout,
         )
 
     for control in controls.values():

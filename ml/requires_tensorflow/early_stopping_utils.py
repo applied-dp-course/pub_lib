@@ -22,10 +22,12 @@ def get_dataset_size(data: LabeledData) -> int:
 
 
 def split_train_validation(
-    labeled_data: LabeledData, train_size: float
+    labeled_data: LabeledData, train_size: float, rng: np.random.Generator | None = None
 ) -> tuple[LabeledData, LabeledData]:
+    if rng is None:
+        rng = np.random.default_rng()
     train_size = int(train_size * len(labeled_data['labels']))
-    indexes_permutation = np.random.permutation(labeled_data['data'].shape[0])
+    indexes_permutation = rng.permutation(labeled_data['data'].shape[0])
     train_indexes = indexes_permutation[:train_size]
     validation_indexes = indexes_permutation[train_size:]
     train_data = {
@@ -39,12 +41,14 @@ def split_train_validation(
     return train_data, validation_data
 
 
-def get_data() -> Tuple[LabeledData, LabeledData, LabeledData | None]:
+def get_data(seed=None) -> Tuple[LabeledData, LabeledData, LabeledData | None]:
     mask = lambda x, y: (y == 0) | (y == 1)
     label_map = lambda y: y
 
     train_and_validation_data, test_data = load_data(mask=mask, label_map=label_map)
-    train_data, validation_data = split_train_validation(train_and_validation_data, train_size=0.8)
+    train_data, validation_data = split_train_validation(
+        train_and_validation_data, train_size=0.8, rng=np.random.default_rng(seed)
+    )
     return train_data, validation_data, test_data
 
 
@@ -84,8 +88,10 @@ def get_training_and_validation_loss(
     return training_loss, validation_loss
 
 
-def get_epoch_batches(train_data: LabeledData, batch_size: int) -> List[LabeledData]:
-    train_data = shuffle_data(train_data)
+def get_epoch_batches(
+    train_data: LabeledData, batch_size: int, rng: np.random.Generator | None = None
+) -> List[LabeledData]:
+    train_data = shuffle_data(train_data, rng=rng)
     batches = split_to_batches(train_data, batch_size)
     return batches
 
@@ -96,14 +102,17 @@ def dp_sgd_epoch(
     model_class,
     curr_weights,
     params: PrivateLearningWithEarlyStoppingParameters,
+    rng: np.random.Generator | None = None,
 ):
-    epoch_batches = get_epoch_batches(train_data, batch_size)
+    if rng is None:
+        rng = np.random.default_rng()
+    epoch_batches = get_epoch_batches(train_data, batch_size, rng=rng)
     for batch in epoch_batches:
         full_gradient = model_class.calc_full_gradient(curr_weights, batch)
         norm = np.linalg.norm(full_gradient, axis=1, keepdims=True)
         full_gradient *= np.clip(params.clipping_radius / (norm + 1e-8), None, 1)
         gradient = np.mean(full_gradient, axis=0)
-        gradient += np.random.normal(0, params.noise_factor, gradient.shape)
+        gradient += rng.normal(0, params.noise_factor, gradient.shape)
         curr_weights += params.learning_rate * gradient
     return curr_weights
 

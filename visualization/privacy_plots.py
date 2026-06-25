@@ -12,6 +12,36 @@ import plotly.graph_objects as go
 
 from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec, iframe_embed
 
+_EPSILON_MAX = math.log(30)
+_DEFAULT_EPSILON = 0.0
+_DEFAULT_DELTA = 0.0
+
+
+def _epsilon_control_spec(epsilon: float = _DEFAULT_EPSILON) -> ControlSpec:
+    return ControlSpec(
+        name="epsilon",
+        kind="slider",
+        label="ε",
+        default=epsilon,
+        min=0.0,
+        max=_EPSILON_MAX,
+        step=0.01,
+        continuous=True,
+    )
+
+
+def _privacy_delta_control_spec(delta: float = _DEFAULT_DELTA) -> ControlSpec:
+    return ControlSpec(
+        name="delta",
+        kind="slider",
+        label="δ",
+        default=delta,
+        min=0.0,
+        max=1.0,
+        step=0.01,
+        continuous=True,
+    )
+
 
 def _linspace(start: float, stop: float, count: int) -> list[float]:
     if count <= 0:
@@ -206,13 +236,41 @@ def _privacy_plot_artifact_name(
     return f"privacy-plot-{distribution_slug}-{digest}"
 
 
+def _make_privacy_plot_interactive_figure(
+    epsilon: float,
+    delta: float,
+    *,
+    distribution_names: Sequence[str] = ("norm",),
+    sensitivity: float = 1.0,
+    std: float = 1.5,
+    res: int = 100,
+) -> go.Figure:
+    """Interactive adapter: ``epsilon`` and ``delta`` map to ``log_slope`` and ``shift``."""
+
+    return make_privacy_bound_figure(
+        epsilon,
+        delta,
+        distribution_names=distribution_names,
+        sensitivity=sensitivity,
+        std=std,
+        res=res,
+    )
+
+
 def privacy_plot_spec(
     distribution_types: Sequence = ("norm",),
     sensitivity: float = 1.0,
     std: float = 1.5,
     res: int = 100,
+    epsilon: float = _DEFAULT_EPSILON,
+    delta: float = _DEFAULT_DELTA,
 ) -> InteractiveSpec:
     """Return the backend-neutral specification for ``PrivacyPlot``."""
+
+    if not 0.0 <= epsilon <= _EPSILON_MAX:
+        raise ValueError(f"epsilon must be between 0 and {_EPSILON_MAX}")
+    if not 0.0 <= delta <= 1.0:
+        raise ValueError("delta must be between 0 and 1")
 
     distribution_names = tuple(_distribution_name(item) for item in distribution_types)
     fixed_kwargs = {
@@ -230,26 +288,8 @@ def privacy_plot_spec(
             res=res,
         ),
         controls=(
-            ControlSpec(
-                name="log_slope",
-                kind="slider",
-                label="log(slope)",
-                default=0.0,
-                min=0.0,
-                max=math.log(30),
-                step=0.01,
-                continuous=True,
-            ),
-            ControlSpec(
-                name="shift",
-                kind="slider",
-                label="shift",
-                default=0.0,
-                min=0.0,
-                max=1.0,
-                step=0.01,
-                continuous=True,
-            ),
+            _epsilon_control_spec(epsilon),
+            _privacy_delta_control_spec(delta),
         ),
         preferred_backend="wasm-marimo",
         # Only advertise backends that have a working renderer. JupyterLite
@@ -257,10 +297,12 @@ def privacy_plot_spec(
         # no render_jupyterlite adapter exists yet, so claiming it here would
         # let the build pick a backend it cannot actually produce.
         allowed_backends=("ipywidgets", "wasm-marimo"),
-        make_figure=make_privacy_bound_figure,
-        figure_factory=("libdpy.visualization.privacy_plots:make_privacy_bound_figure"),
+        make_figure=_make_privacy_plot_interactive_figure,
+        figure_factory=(
+            "libdpy.visualization.privacy_plots:_make_privacy_plot_interactive_figure"
+        ),
         fixed_kwargs=fixed_kwargs,
-        description="Privacy bound explorer with two continuous controls.",
+        description="Privacy bound explorer with ε and δ controls.",
     )
 
 
@@ -269,12 +311,23 @@ def privacy_plot_ipywidgets(
     sensitivity: float = 1.0,
     std: float = 1.5,
     res: int = 100,
+    epsilon: float = _DEFAULT_EPSILON,
+    delta: float = _DEFAULT_DELTA,
 ):
     """Return the established widget root through the shared renderer."""
 
     from .interactive_widgets import render_ipywidgets
 
-    return render_ipywidgets(privacy_plot_spec(distribution_types, sensitivity, std, res)).root
+    return render_ipywidgets(
+        privacy_plot_spec(
+            distribution_types,
+            sensitivity,
+            std,
+            res,
+            epsilon=epsilon,
+            delta=delta,
+        )
+    ).root
 
 
 class PrivacyPlot(AbstractInteractivePlot):
@@ -286,11 +339,20 @@ class PrivacyPlot(AbstractInteractivePlot):
         sensitivity: float,
         std: float,
         res: int = 100,
+        epsilon: float = _DEFAULT_EPSILON,
+        delta: float = _DEFAULT_DELTA,
     ):
+        if not 0.0 <= epsilon <= _EPSILON_MAX:
+            raise ValueError(f"epsilon must be between 0 and {_EPSILON_MAX}")
+        if not 0.0 <= delta <= 1.0:
+            raise ValueError("delta must be between 0 and 1")
+
         self.distribution_types = tuple(distribution_types)
         self.sensitivity = sensitivity
         self.std = std
         self.res = res
+        self.epsilon = float(epsilon)
+        self.delta = float(delta)
 
     def spec(self) -> InteractiveSpec:
         return privacy_plot_spec(
@@ -298,6 +360,8 @@ class PrivacyPlot(AbstractInteractivePlot):
             sensitivity=self.sensitivity,
             std=self.std,
             res=self.res,
+            epsilon=self.epsilon,
+            delta=self.delta,
         )
 
     def show(self):
@@ -308,6 +372,8 @@ class PrivacyPlot(AbstractInteractivePlot):
             sensitivity=self.sensitivity,
             std=self.std,
             res=self.res,
+            epsilon=self.epsilon,
+            delta=self.delta,
         )
 
     def embed(

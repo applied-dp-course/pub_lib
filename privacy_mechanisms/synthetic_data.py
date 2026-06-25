@@ -4,20 +4,24 @@ import numpy as np
 import pandas as pd
 
 
-def generate_private_gaussian_data(n, mu, sd, epsilon):
+def generate_private_gaussian_data(n, mu, sd, epsilon, seed=None):
+    rng = np.random.default_rng(seed)
+
     # Generate original data
-    data = np.random.normal(mu, sd, n)
+    data = rng.normal(mu, sd, n)
 
     # Add Laplace noise to the mean estimate
-    private_mu_hat = np.mean(data) + np.random.laplace(scale=(1 / n) / epsilon)
+    private_mu_hat = np.mean(data) + rng.laplace(scale=(1 / n) / epsilon)
 
     # Generate synthetic data using the noisy mean
-    private_data = np.random.normal(private_mu_hat, sd, n)
+    private_data = rng.normal(private_mu_hat, sd, n)
 
     return data, private_data, private_mu_hat
 
 
-def create_noisy_histogram(data, epsilon):
+def create_noisy_histogram(data, epsilon, rng: np.random.Generator | None = None):
+    if rng is None:
+        rng = np.random.default_rng()
     if not isinstance(data, pd.DataFrame):
         raise ValueError("Data must be a pandas DataFrame")
 
@@ -34,7 +38,7 @@ def create_noisy_histogram(data, epsilon):
             # Calculate true proportion
             count = data[data[column] == value].shape[0] / n
             # Add Laplace noise
-            noisy_counts[value] = count + np.random.laplace(scale=1 / (epsilon * n))
+            noisy_counts[value] = count + rng.laplace(scale=1 / (epsilon * n))
 
         # Post-process: ensure non-negative and normalize
         for value in noisy_counts.keys():
@@ -54,7 +58,9 @@ def create_noisy_histogram(data, epsilon):
     return final_data
 
 
-def sample_synthetic_data(noisy_counts, n):
+def sample_synthetic_data(noisy_counts, n, rng: np.random.Generator | None = None):
+    if rng is None:
+        rng = np.random.default_rng()
     synthetic_data = pd.DataFrame()
 
     for column, counts in noisy_counts.items():
@@ -62,7 +68,7 @@ def sample_synthetic_data(noisy_counts, n):
         probs = list(counts.values())
 
         # Sample from the noisy distribution
-        new_column = np.random.choice(values, size=n, p=probs)
+        new_column = rng.choice(values, size=n, p=probs)
         synthetic_data[column] = new_column
 
     return synthetic_data
@@ -84,12 +90,14 @@ def calculate_domain_size(data):
     return num_combinations
 
 
-def generate_private_synthetic_dataset(data, epsilon_per_column=0.1):
+def generate_private_synthetic_dataset(data, epsilon_per_column=0.1, seed=None):
+    rng = np.random.default_rng(seed)
+
     # Create noisy histogram
-    noisy_counts = create_noisy_histogram(data, epsilon_per_column)
+    noisy_counts = create_noisy_histogram(data, epsilon_per_column, rng=rng)
 
     # Generate synthetic data with same size as original
-    synthetic_data = sample_synthetic_data(noisy_counts, len(data))
+    synthetic_data = sample_synthetic_data(noisy_counts, len(data), rng=rng)
 
     # Calculate domain size for reference
     domain_size = calculate_domain_size(data)

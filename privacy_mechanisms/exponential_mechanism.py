@@ -1,4 +1,3 @@
-import random
 from typing import Callable, List, TypeVar
 
 import numpy as np
@@ -16,9 +15,12 @@ def exponential_mechanism(
     utility_function: Callable,
     sensitivity: float,
     epsilon: float,
+    rng: np.random.Generator | None = None,
 ) -> T:
+    if rng is None:
+        rng = np.random.default_rng()
     scores = [utility_function(database, r) for r in possible_responses]
     probabilities = np.array([np.exp(epsilon * score / (2 * sensitivity)) for score in scores])
     probabilities = probabilities / np.sum(probabilities)
-    response = random.choices(possible_responses, weights=probabilities, k=1)[0]
+    response = possible_responses[rng.choice(len(possible_responses), p=probabilities)]
     return response

@@ -16,7 +16,8 @@ class LogisticRegressionModel:
         self.final_weights = np.zeros(input_dim)
         self.clipping_method = clipping_method
 
-    def train(self, data_set: Dict[str, np.ndarray], params: LearningParameters):
+    def train(self, data_set: Dict[str, np.ndarray], params: LearningParameters, seed=None):
+        rng = np.random.default_rng(seed)
         weights_arr = [self.final_weights.copy()]
         data, labels = data_set['data'], data_set['labels']
 
@@ -29,7 +30,7 @@ class LogisticRegressionModel:
             gradient = np.mean(full_gradient, axis=0)
 
             if params.is_noised:
-                noise = np.random.normal(0, params.noise_factor, gradient.shape)
+                noise = rng.normal(0, params.noise_factor, gradient.shape)
                 gradient += noise
 
             self.final_weights += params.learning_rate * gradient
@@ -42,11 +43,15 @@ class LogisticRegressionModel:
 
 
 def train_and_evaluate(
-    processed_data, learning_params: LearningParameters, clipping_methods, print_result=True
+    processed_data,
+    learning_params: LearningParameters,
+    clipping_methods,
+    print_result=True,
+    seed=None,
 ):
     train_set, test_set = processed_data
     model = LogisticRegressionModel(train_set['data'].shape[1], clipping_methods)
-    weights_arr = model.train(train_set, learning_params)
+    weights_arr = model.train(train_set, learning_params, seed=seed)
 
     # Evaluate on test data
     test_probabilities = model.predict(test_set['data'])

@@ -15,24 +15,28 @@ POSSIBLE_MEDIANS = [
 
 
 def get_random_grades(seed=None) -> list:
-    """Generate random grades for evaluation."""
-    if seed is not None:
-        np.random.seed(seed)
+    """Generate random grades for evaluation.
 
-    grades_number = np.random.randint(50, 150)
-    expected_grade = np.random.uniform(70, 90)
+    ``seed`` may be an int (reproducible), ``None`` (fresh randomness), or an existing
+    ``np.random.Generator`` (threaded from a caller), thanks to ``default_rng`` pass-through.
+    """
+    rng = np.random.default_rng(seed)
 
-    grades = np.random.normal(loc=expected_grade, scale=15, size=grades_number)
+    grades_number = rng.integers(50, 150)
+    expected_grade = rng.uniform(70, 90)
+
+    grades = rng.normal(loc=expected_grade, scale=15, size=grades_number)
     grades = [max(MIN_GRADE, min(MAX_GRADE, grade)) for grade in grades]  # type: ignore
     grades = [round(grade) for grade in grades]  # type: ignore
     return grades  # type: ignore
 
 
 def get_mean_median_estimation_error(
-    estimation_function, epsilon: float, experiments_number: int, **kwargs
+    estimation_function, epsilon: float, experiments_number: int, seed=None, **kwargs
 ) -> float:
+    rng = np.random.default_rng(seed)
     return get_mean_estimation_error(
-        data_generator=get_random_grades,
+        data_generator=lambda: get_random_grades(seed=rng),
         estimation_function=estimation_function,
         experiments_number=experiments_number,
         epsilon=epsilon,
@@ -41,9 +45,11 @@ def get_mean_median_estimation_error(
     )
 
 
-def plot_estimations(estimation_function, epsilon: float, experiments_number: int, **kwargs):
+def plot_estimations(
+    estimation_function, epsilon: float, experiments_number: int, seed=0, **kwargs
+):
     """Plot distribution of median estimations."""
-    grades = get_random_grades(seed=0)
+    grades = get_random_grades(seed=seed)
     exact_median = np.median(grades)
     median_estimations = [
         estimation_function(grades, epsilon=epsilon, **kwargs) for _ in range(experiments_number)
