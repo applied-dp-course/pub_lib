@@ -546,6 +546,7 @@ def marimo_app_source(
     figure_deps = ", ".join(widget_names)
     fixed_kwargs = json.dumps(dict(spec.fixed_kwargs), sort_keys=True)
     module_name, function_name = spec.figure_factory.split(":", maxsplit=1)
+    pyodide_packages = json.dumps(["numpy", "scipy", "scikit-learn"])
 
     return f"""# /// script
 # requires-python = ">=3.11"
@@ -573,6 +574,7 @@ async def _(mo):
     if sys.platform == "emscripten":
         import micropip
 
+        await micropip.install({pyodide_packages})
         wheel_url = str(mo.notebook_location() / "public" / {wheel_filename!r})
         await micropip.install(wheel_url, deps=False)
     libdpy_ready = True

@@ -14,7 +14,6 @@ from libdpy.visualization.interactive import (
     ControlSpec,
     InteractiveSpec,
 )
-from libdpy.visualization.interactive_widgets import render_ipywidgets
 from libdpy.assignment_specific.privacy_auditing.utils import (
     run_repeated_gaussian_audits,
     true_epsilon_gaussian_threshold,
@@ -158,10 +157,14 @@ def binomial_beta_bounds_spec(*, log_y: bool = False) -> InteractiveSpec:
 
 
 def binomial_alpha_bounds_interactive():
+    from libdpy.visualization.interactive_widgets import render_ipywidgets
+
     return render_ipywidgets(binomial_alpha_bounds_spec()).root
 
 
 def binomial_beta_bounds_interactive(*, log_y: bool = False):
+    from libdpy.visualization.interactive_widgets import render_ipywidgets
+
     return render_ipywidgets(binomial_beta_bounds_spec(log_y=log_y)).root
 
 
@@ -335,6 +338,8 @@ def naive_safe_epsilon_histogram_interactive(
     n_repeats: int = 200,
     seed: int = 0,
 ):
+    from libdpy.visualization.interactive_widgets import render_ipywidgets
+
     return render_ipywidgets(
         naive_safe_epsilon_histogram_spec(
             scale=scale,

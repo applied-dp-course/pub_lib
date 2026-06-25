@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 import plotly.graph_objects as go
-from IPython.display import display
 from plotly.subplots import make_subplots
 from scipy.stats import cauchy, laplace, logistic, norm, t
 from scipy.stats import rv_continuous as Distribution
@@ -22,6 +21,13 @@ from .interactive import (
     InteractiveSpec,
     declarative_plotly_from_spec,
 )
+
+try:
+    from IPython.display import display
+except ImportError:  # pragma: no cover - exercised in browser-side Pyodide exports.
+
+    def display(*_args, **_kwargs):
+        return None
 
 
 class ComparisonType(Enum):
