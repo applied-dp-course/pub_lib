@@ -27,6 +27,14 @@ _VALID_CONTROL_KINDS = frozenset(
 _PYTHON_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _running_in_colab() -> bool:
+    try:
+        import google.colab  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class ControlSpec:
     """Describe one backend-neutral interactive control."""
@@ -215,17 +223,19 @@ class AbstractInteractivePlot(ABC):
         height: int | None = None,
         mode: str = "page",
         src: str | None = None,
-    ) -> "InteractiveEmbed":
+    ) -> "InteractiveEmbed | Any":
         """Return a lazy iframe for the generated WASM artifact of this plot.
 
         Used by the static site build: the website discovers ``Plot(...).embed()``
         calls and exports each spec to a self-contained marimo WASM app, so the
-        interactive keeps working with no live kernel. Live notebooks (Colab/Jupyter)
-        should call :meth:`show` instead.
+        interactive keeps working with no live kernel. In Colab, ``embed`` falls
+        back to :meth:`show` so the same uploaded notebook runs with live widgets.
         """
 
         if mode not in {"page", "deck"}:
             raise ValueError("mode must be 'page' or 'deck'")
+        if _running_in_colab():
+            return self.show()
         resolved_height = height if height is not None else (620 if mode == "deck" else 750)
         return iframe_embed(self.spec(), src=src, height=resolved_height)
 
@@ -477,7 +487,7 @@ def marimo_app_source(
     unsupported = [control.kind for control in spec.controls if control.kind not in supported_kinds]
     if unsupported:
         raise NotImplementedError(
-            "the marimo renderer supports sliders and checkboxes; "
+            "the marimo renderer supports sliders, checkboxes, and toggle buttons; "
             f"unsupported controls: {sorted(set(unsupported))}"
         )
 
@@ -507,10 +517,17 @@ def marimo_app_source(
                 f"value={control.default!r}, label={control.label!r}, "
                 "show_value=True, full_width=True)"
             )
-        else:  # checkbox / toggle_button
+        elif control.kind == "checkbox":
             control_lines.append(
                 f"    {control.name} = mo.ui.checkbox("
                 f"value={bool(control.default)!r}, label={control.label!r})"
+            )
+        else:  # toggle_button
+            control_lines.append(
+                f"    {control.name} = mo.ui.button("
+                f"value={bool(control.default)!r}, "
+                "on_click=lambda value: not value, "
+                f"label={control.label!r})"
             )
 
     action_lines = []
@@ -599,15 +616,15 @@ def _(mo):
 
 
 @app.cell
-def _(controls):
-    controls
+def _({figure_deps}, fixed_kwargs, make_figure):
+    figure = make_figure({figure_args}, **fixed_kwargs)
+    figure
     return
 
 
 @app.cell
-def _({figure_deps}, fixed_kwargs, make_figure):
-    figure = make_figure({figure_args}, **fixed_kwargs)
-    figure
+def _(controls):
+    controls
     return
 
 
