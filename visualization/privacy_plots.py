@@ -10,7 +10,7 @@ from statistics import NormalDist
 
 import plotly.graph_objects as go
 
-from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec, iframe_embed
+from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
 
 _EPSILON_MAX = math.log(30)
 _DEFAULT_EPSILON = 0.0
@@ -375,21 +375,6 @@ class PrivacyPlot(AbstractInteractivePlot):
             epsilon=self.epsilon,
             delta=self.delta,
         )
-
-    def embed(
-        self,
-        *,
-        height: int | None = None,
-        mode: str = "page",
-        src: str | None = None,
-    ):
-        """Return a lazy iframe for the generated marimo WASM artifact."""
-
-        if mode not in {"page", "deck"}:
-            raise ValueError("mode must be 'page' or 'deck'")
-        resolved_height = height if height is not None else (620 if mode == "deck" else 750)
-        return iframe_embed(self.spec(), src=src, height=resolved_height)
-
 
 def plot_epsilon_delta_tradeoff(
     epsilons, deltas, mechanism_names=None, title="Privacy Budget Trade-off"

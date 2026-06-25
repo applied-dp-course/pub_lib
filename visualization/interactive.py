@@ -90,12 +90,25 @@ class ActionSpec:
         Mapping[str, Any] | None,
     ]
     button_style: str = ""
+    state_updates: Mapping[str, int] = field(default_factory=dict)
+    """Declarative semantics for kernel-free renderers (e.g. ``wasm-marimo``).
+
+    Maps a state key to the integer delta applied each time the action fires. The
+    live ``ipywidgets`` renderer uses ``handler`` instead; the WASM renderer cannot
+    serialize an arbitrary callable, so it relies on this declaration to model the
+    action as a button accumulator. Both current actions just advance a seed by one.
+    """
 
     def __post_init__(self) -> None:
         if not _PYTHON_IDENTIFIER.fullmatch(self.name):
             raise ValueError(f"action name must be a Python identifier: {self.name!r}")
         if not self.label:
             raise ValueError("action label must not be empty")
+        for key, delta in self.state_updates.items():
+            if not _PYTHON_IDENTIFIER.fullmatch(key):
+                raise ValueError(f"action {self.name!r} state key must be an identifier: {key!r}")
+            if not isinstance(delta, int) or isinstance(delta, bool):
+                raise ValueError(f"action {self.name!r} state delta must be an int: {key!r}={delta!r}")
 
 
 @dataclass(frozen=True)
@@ -195,6 +208,26 @@ class AbstractInteractivePlot(ABC):
         rendered = self.widget(**renderer_options)
         display(rendered.root)
         return rendered.root
+
+    def embed(
+        self,
+        *,
+        height: int | None = None,
+        mode: str = "page",
+        src: str | None = None,
+    ) -> "InteractiveEmbed":
+        """Return a lazy iframe for the generated WASM artifact of this plot.
+
+        Used by the static site build: the website discovers ``Plot(...).embed()``
+        calls and exports each spec to a self-contained marimo WASM app, so the
+        interactive keeps working with no live kernel. Live notebooks (Colab/Jupyter)
+        should call :meth:`show` instead.
+        """
+
+        if mode not in {"page", "deck"}:
+            raise ValueError("mode must be 'page' or 'deck'")
+        resolved_height = height if height is not None else (620 if mode == "deck" else 750)
+        return iframe_embed(self.spec(), src=src, height=resolved_height)
 
 
 class SpecInteractivePlot(AbstractInteractivePlot):
@@ -438,32 +471,79 @@ def marimo_app_source(
 
     if "wasm-marimo" not in spec.allowed_backends:
         raise ValueError(f"{spec.name} does not allow the wasm-marimo backend")
-    if spec.actions or spec.new_state():
-        raise NotImplementedError("the current marimo renderer does not support stateful actions")
     if PurePosixPath(wheel_filename).name != wheel_filename or not wheel_filename.endswith(".whl"):
         raise ValueError("wheel_filename must be a wheel basename")
-    unsupported = [control.kind for control in spec.controls if control.kind != "slider"]
+    supported_kinds = {"slider", "checkbox", "toggle_button"}
+    unsupported = [control.kind for control in spec.controls if control.kind not in supported_kinds]
     if unsupported:
         raise NotImplementedError(
-            "the initial marimo renderer supports sliders only; "
+            "the marimo renderer supports sliders and checkboxes; "
             f"unsupported controls: {sorted(set(unsupported))}"
         )
 
-    slider_lines = []
+    # Each action is modelled as a button accumulator that advances one state key.
+    state = spec.new_state()
+    state_source: dict[str, str] = {}
+    for action in spec.actions:
+        if len(action.state_updates) != 1:
+            raise NotImplementedError(
+                f"the marimo renderer needs action {action.name!r} to update exactly one state key"
+            )
+        (key, delta), = action.state_updates.items()
+        if key not in state:
+            raise ValueError(f"action {action.name!r} updates unknown state key {key!r}")
+        if key in state_source:
+            raise NotImplementedError(f"state key {key!r} is driven by more than one action")
+        state_source[key] = f"{action.name}.value"
+
+    control_lines = []
     control_names = []
     for control in spec.controls:
         control_names.append(control.name)
-        slider_lines.append(
-            f"    {control.name} = mo.ui.slider("
-            f"start={control.min!r}, stop={control.max!r}, step={control.step!r}, "
-            f"value={control.default!r}, label={control.label!r}, "
-            "show_value=True, full_width=True)"
+        if control.kind == "slider":
+            control_lines.append(
+                f"    {control.name} = mo.ui.slider("
+                f"start={control.min!r}, stop={control.max!r}, step={control.step!r}, "
+                f"value={control.default!r}, label={control.label!r}, "
+                "show_value=True, full_width=True)"
+            )
+        else:  # checkbox / toggle_button
+            control_lines.append(
+                f"    {control.name} = mo.ui.checkbox("
+                f"value={bool(control.default)!r}, label={control.label!r})"
+            )
+
+    action_lines = []
+    action_names = []
+    for action in spec.actions:
+        (key, delta), = action.state_updates.items()
+        action_names.append(action.name)
+        action_lines.append(
+            f"    {action.name} = mo.ui.button("
+            f"value={state[key]!r}, on_click=lambda value: value + {delta!r}, "
+            f"label={action.label!r})"
         )
-    sliders = "\n".join(slider_lines)
-    returns = ", ".join(control_names)
-    if len(control_names) == 1:
+
+    widget_names = control_names + action_names
+    if action_names:
+        layout = (
+            f"mo.vstack([mo.hstack([{', '.join(control_names)}], widths='equal', gap=2), "
+            f"mo.hstack([{', '.join(action_names)}], gap=1)])"
+        )
+    else:
+        layout = f"mo.hstack([{', '.join(control_names)}], widths='equal', gap=2)"
+
+    returns = ", ".join(widget_names)
+    if len(widget_names) == 1:
         returns += ","
-    figure_args = ", ".join(f"{name}={name}.value" for name in control_names)
+
+    figure_arg_parts = [f"{name}={name}.value" for name in control_names]
+    for key in state:
+        figure_arg_parts.append(
+            f"{key}={state_source[key]}" if key in state_source else f"{key}={state[key]!r}"
+        )
+    figure_args = ", ".join(figure_arg_parts)
+    figure_deps = ", ".join(widget_names)
     fixed_kwargs = json.dumps(dict(spec.fixed_kwargs), sort_keys=True)
     module_name, function_name = spec.figure_factory.split(":", maxsplit=1)
 
@@ -511,8 +591,8 @@ def _(libdpy_ready):
 
 @app.cell
 def _(mo):
-{sliders}
-    controls = mo.hstack([{", ".join(control_names)}], widths="equal", gap=2)
+{chr(10).join(control_lines + action_lines)}
+    controls = {layout}
     return controls, {returns}
 
 
@@ -523,7 +603,7 @@ def _(controls):
 
 
 @app.cell
-def _({", ".join(control_names)}, fixed_kwargs, make_figure):
+def _({figure_deps}, fixed_kwargs, make_figure):
     figure = make_figure({figure_args}, **fixed_kwargs)
     figure
     return

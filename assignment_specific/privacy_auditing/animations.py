@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -400,3 +401,41 @@ def fixed_threshold_audit_animation_html(
     html = animation.to_jshtml()
     plt.close(figure)
     return html
+
+
+_STANDALONE_PLAYER_TEMPLATE = (
+    "<!doctype html>\n<html><head><meta charset=\"utf-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+    "<style>html,body{{margin:0;padding:0;background:transparent}}"
+    ".animation{{margin:0 auto;width:fit-content;max-width:100%}}"
+    ".animation img{{max-width:100%;height:auto;display:block}}</style></head>"
+    "<body>{body}</body></html>\n"
+)
+
+
+def write_fixed_threshold_audit_animation_player(
+    output_path: str | Path,
+    samples_neg: np.ndarray,
+    samples_pos: np.ndarray,
+    tau_star: float,
+    *,
+    seed: int,
+    delta: float = 1e-2,
+    n_frames: int = 200,
+    fps: float = 24.0,
+) -> Path:
+    """Write a standalone interactive player HTML file for website embedding."""
+
+    body = fixed_threshold_audit_animation_html(
+        samples_neg,
+        samples_pos,
+        tau_star,
+        seed=seed,
+        delta=delta,
+        n_frames=n_frames,
+        fps=fps,
+    )
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_STANDALONE_PLAYER_TEMPLATE.format(body=body), encoding="utf-8")
+    return path

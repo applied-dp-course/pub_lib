@@ -1,11 +1,14 @@
+import hashlib
+import json
 import math
+import re
 from enum import Enum
 from functools import lru_cache, partial
 from typing import Any, Callable, Mapping
 
 import numpy as np
 import plotly.graph_objects as go
-from IPython.core.display_functions import display
+from IPython.display import display
 from plotly.subplots import make_subplots
 from scipy.stats import cauchy, laplace, logistic, norm, t
 from scipy.stats import rv_continuous as Distribution
@@ -1278,6 +1281,136 @@ def _make_empirical_roc_interactive_figure(
     )
 
 
+def _noop_action(_state, _controls):
+    """Placeholder action handler for kernel-free (WASM) specs.
+
+    The live ipywidgets renderer supplies a real handler; the WASM renderer ignores
+    ``handler`` entirely and uses ``ActionSpec.state_updates`` instead.
+    """
+
+    return None
+
+
+def _roc_artifact_name(prefix: str, **configuration: Any) -> str:
+    """Stable, param-derived app id so distinct configs export distinct WASM apps."""
+
+    digest = hashlib.sha256(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:10]
+    distribution = str(configuration.get("distribution", ""))
+    slug = re.sub(r"[^a-z0-9]+", "-", distribution.lower()).strip("-")
+    return f"{prefix}-{slug}-{digest}" if slug else f"{prefix}-{digest}"
+
+
+def theory_roc_spec(
+    distribution: str = "Laplace",
+    scale: float = 1.0,
+    delta: float = _DELTA_DEFAULT_THEORY,
+    *,
+    compute_epsilon: bool = False,
+    show_compute_epsilon_toggle: bool = True,
+    selectable_distribution: bool = True,
+) -> InteractiveSpec:
+    """Backend-neutral spec for the theoretical ROC explorer (widget-free)."""
+
+    distribution = _empirical_distribution(distribution)[0]
+    controls = _theory_roc_interactive_controls(
+        scale,
+        distribution,
+        delta=delta,
+        compute_epsilon=compute_epsilon,
+        show_compute_epsilon_toggle=show_compute_epsilon_toggle,
+        selectable_distribution=selectable_distribution,
+    )
+    fixed_kwargs: dict[str, object] = {}
+    if not selectable_distribution:
+        fixed_kwargs["distribution"] = distribution
+    if not show_compute_epsilon_toggle:
+        fixed_kwargs["compute_epsilon"] = True
+    return InteractiveSpec(
+        name="theory_roc_visualizer",
+        artifact_name=_roc_artifact_name(
+            "theory-roc",
+            distribution=distribution,
+            scale=scale,
+            delta=delta,
+            compute_toggle=show_compute_epsilon_toggle,
+            selectable=selectable_distribution,
+        ),
+        controls=controls,
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets", "wasm-marimo"),
+        fixed_kwargs=fixed_kwargs,
+        make_figure=partial(_make_theory_roc_interactive_figure, resolution=1000),
+        figure_factory=("libdpy.visualization.roc_plots:_make_theory_roc_interactive_figure"),
+        description="Theoretical ROC explorer for common distributions.",
+    )
+
+
+def empirical_roc_spec(
+    n_samples: int,
+    distribution: str = "Laplace",
+    scale: float = 1.0,
+    delta: float = _DELTA_DEFAULT_EMPIRICAL,
+    *,
+    compute_epsilon: bool = False,
+    show_compute_epsilon_toggle: bool = True,
+    selectable_distribution: bool = True,
+    sample_seed: int = 0,
+    action_handler: Callable[..., Any] | None = None,
+) -> InteractiveSpec:
+    """Backend-neutral spec for the empirical ROC explorer (widget-free).
+
+    ``action_handler`` is the live-kernel resample callback; WASM ignores it and uses
+    the declarative ``state_updates`` (advance ``sample_seed`` by one per click).
+    """
+
+    distribution = _empirical_distribution(distribution)[0]
+    controls = _empirical_roc_interactive_controls(
+        n_samples,
+        scale,
+        distribution,
+        delta=delta,
+        compute_epsilon=compute_epsilon,
+        show_compute_epsilon_toggle=show_compute_epsilon_toggle,
+        selectable_distribution=selectable_distribution,
+    )
+    fixed_kwargs: dict[str, object] = {}
+    if not selectable_distribution:
+        fixed_kwargs["distribution"] = distribution
+    if not show_compute_epsilon_toggle:
+        fixed_kwargs["compute_epsilon"] = True
+    return InteractiveSpec(
+        name="empirical_roc_visualizer",
+        artifact_name=_roc_artifact_name(
+            "empirical-roc",
+            distribution=distribution,
+            scale=scale,
+            delta=delta,
+            n_samples=n_samples,
+            compute_toggle=show_compute_epsilon_toggle,
+            selectable=selectable_distribution,
+        ),
+        controls=controls,
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets", "wasm-marimo"),
+        fixed_kwargs=fixed_kwargs,
+        make_figure=partial(_make_empirical_roc_interactive_figure, resolution=1000),
+        figure_factory=("libdpy.visualization.roc_plots:_make_empirical_roc_interactive_figure"),
+        description="Theoretical and empirical ROC explorer for common distributions.",
+        actions=(
+            ActionSpec(
+                name="generate_samples",
+                label="Generate Samples",
+                handler=action_handler if action_handler is not None else _noop_action,
+                button_style="info",
+                state_updates={"sample_seed": 1},
+            ),
+        ),
+        initial_state={"sample_seed": sample_seed},
+    )
+
+
 class EmpROCVisualizer(AbstractInteractivePlot):
     """ROC explorer backed by the generic interactive engine."""
 
@@ -1349,44 +1482,16 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         )
 
     def spec(self) -> InteractiveSpec:
-        controls = _empirical_roc_interactive_controls(
+        return empirical_roc_spec(
             self.n_samples,
-            self.scale,
             self.distribution,
-            delta=self.delta,
+            self.scale,
+            self.delta,
             compute_epsilon=self.compute_epsilon,
             show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
             selectable_distribution=self.selectable_distribution,
-        )
-        fixed_kwargs: dict[str, object] = {}
-        if not self.selectable_distribution:
-            fixed_kwargs = {"distribution": self.distribution}
-        if not self.show_compute_epsilon_toggle:
-            fixed_kwargs["compute_epsilon"] = True
-        return InteractiveSpec(
-            name="empirical_roc_visualizer",
-            artifact_name="empirical-roc-visualizer",
-            controls=controls,
-            preferred_backend="ipywidgets",
-            allowed_backends=("ipywidgets",),
-            fixed_kwargs=fixed_kwargs,
-            make_figure=partial(
-                _make_empirical_roc_interactive_figure,
-                resolution=1000,
-            ),
-            figure_factory=(
-                "libdpy.visualization.roc_plots:_make_empirical_roc_interactive_figure"
-            ),
-            description=("Theoretical and empirical ROC explorer for common distributions."),
-            actions=(
-                ActionSpec(
-                    name="generate_samples",
-                    label="Generate Samples",
-                    handler=self._generate_samples_action,
-                    button_style="info",
-                ),
-            ),
-            initial_state={"sample_seed": self._initial_sample_seed},
+            sample_seed=self._initial_sample_seed,
+            action_handler=self._generate_samples_action,
         )
 
     @property
@@ -2338,34 +2443,13 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
         )
 
     def spec(self) -> InteractiveSpec:
-        controls = _theory_roc_interactive_controls(
-            self.scale,
+        return theory_roc_spec(
             self.distribution,
-            delta=self.delta,
+            self.scale,
+            self.delta,
             compute_epsilon=self.compute_epsilon,
             show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
             selectable_distribution=self.selectable_distribution,
-        )
-        fixed_kwargs: dict[str, object] = {}
-        if not self.selectable_distribution:
-            fixed_kwargs = {"distribution": self.distribution}
-        if not self.show_compute_epsilon_toggle:
-            fixed_kwargs["compute_epsilon"] = True
-        return InteractiveSpec(
-            name="theory_roc_visualizer",
-            artifact_name="theory-roc-visualizer",
-            controls=controls,
-            preferred_backend="ipywidgets",
-            allowed_backends=("ipywidgets",),
-            fixed_kwargs=fixed_kwargs,
-            make_figure=partial(
-                _make_theory_roc_interactive_figure,
-                resolution=1000,
-            ),
-            figure_factory=(
-                "libdpy.visualization.roc_plots:_make_theory_roc_interactive_figure"
-            ),
-            description=("Theoretical ROC explorer for common distributions."),
         )
 
     def plot_curves(

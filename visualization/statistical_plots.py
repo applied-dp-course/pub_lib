@@ -2,7 +2,7 @@
 
 import numpy as np
 import plotly.graph_objects as go
-from IPython.core.display_functions import display
+from IPython.display import display
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm
 

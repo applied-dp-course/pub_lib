@@ -8,7 +8,12 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.special import xlogy
 
-from libdpy.visualization.interactive import ActionSpec, ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive import (
+    AbstractInteractivePlot,
+    ActionSpec,
+    ControlSpec,
+    InteractiveSpec,
+)
 from libdpy.visualization.interactive_widgets import render_ipywidgets
 from libdpy.assignment_specific.privacy_auditing.utils import (
     run_repeated_gaussian_audits,
@@ -291,7 +296,7 @@ def naive_safe_epsilon_histogram_spec(
             ),
         ),
         preferred_backend="ipywidgets",
-        allowed_backends=("ipywidgets",),
+        allowed_backends=("ipywidgets", "wasm-marimo"),
         fixed_kwargs={
             "scale": scale,
             "tau": tau,
@@ -309,6 +314,7 @@ def naive_safe_epsilon_histogram_spec(
                 label="Resample",
                 handler=resample_action,
                 button_style="info",
+                state_updates={"seed": 1},
             ),
         ),
         initial_state={"seed": seed},
@@ -340,3 +346,35 @@ def naive_safe_epsilon_histogram_interactive(
             seed=seed,
         )
     ).root
+
+
+class NaiveSafeEpsilonHistogram(AbstractInteractivePlot):
+    """Embeddable wrapper for the naive-vs-safe epsilon histogram explorer.
+
+    Use ``.show()`` in a live kernel (Colab/Jupyter) and ``.embed()`` for the static
+    site build, mirroring the other interactive plot wrappers.
+    """
+
+    def __init__(
+        self,
+        *,
+        scale: float = 1.0,
+        tau: float = 0.5,
+        delta: float = 1e-2,
+        n_audit: int = 500,
+        alpha_total: float = 0.05,
+        n_repeats: int = 200,
+        seed: int = 0,
+    ):
+        self._kwargs = dict(
+            scale=scale,
+            tau=tau,
+            delta=delta,
+            n_audit=n_audit,
+            alpha_total=alpha_total,
+            n_repeats=n_repeats,
+            seed=seed,
+        )
+
+    def spec(self) -> InteractiveSpec:
+        return naive_safe_epsilon_histogram_spec(**self._kwargs)
