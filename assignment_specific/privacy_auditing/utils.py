@@ -5,7 +5,6 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from matplotlib import pyplot as plt
 from scipy.stats import beta
 from sklearn.metrics import roc_curve
 
@@ -44,6 +43,8 @@ def legacy_algorithm(database: list, rng: np.random.Generator | None = None) -> 
 
 
 def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: int):
+    from matplotlib import pyplot as plt
+
     results_0 = [algorithm(db0) for _ in range(repetitions_number)]
     results_1 = [algorithm(db1) for _ in range(repetitions_number)]
     plt.figure(figsize=(8, 6))
