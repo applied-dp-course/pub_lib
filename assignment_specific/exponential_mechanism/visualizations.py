@@ -6,10 +6,12 @@ from collections.abc import Sequence
 
 import numpy as np
 import plotly.graph_objects as go
-from IPython.display import display
 
-from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
-from libdpy.visualization.interactive_widgets import render_ipywidgets
+from libdpy.visualization.interactive import (
+    AbstractInteractivePlot,
+    ControlSpec,
+    InteractiveSpec,
+)
 
 
 def exponential_mechanism_probabilities(
@@ -108,8 +110,8 @@ def exponential_mechanism_spec(
                 step=0.1,
             ),
         ),
-        preferred_backend="ipywidgets",
-        allowed_backends=("ipywidgets",),
+        preferred_backend="wasm-marimo",
+        allowed_backends=("ipywidgets", "wasm-marimo"),
         make_figure=make_exponential_mechanism_figure,
         figure_factory=(
             "libdpy.assignment_specific.exponential_mechanism.visualizations:"
@@ -123,18 +125,38 @@ def exponential_mechanism_spec(
     )
 
 
+class ExponentialMechanismInteractive(AbstractInteractivePlot):
+    """Interactive exponential-mechanism probability explorer."""
+
+    def __init__(
+        self,
+        utilities: Sequence[float],
+        *,
+        sensitivity: float,
+        labels: Sequence[str] | None = None,
+    ):
+        self._utilities = tuple(float(value) for value in utilities)
+        self._sensitivity = float(sensitivity)
+        self._labels = tuple(labels) if labels is not None else None
+
+    def spec(self) -> InteractiveSpec:
+        return exponential_mechanism_spec(
+            self._utilities,
+            sensitivity=self._sensitivity,
+            labels=self._labels,
+        )
+
+
 def create_exponential_mechanism_interactive(
     utilities: Sequence[float],
     *,
     sensitivity: float,
     labels: Sequence[str] | None = None,
 ):
-    rendered = render_ipywidgets(
-        exponential_mechanism_spec(
-            utilities,
-            sensitivity=sensitivity,
-            labels=labels,
-        )
-    )
-    display(rendered.root)
-    return rendered.root
+    """Backward-compatible launcher — prefer ``ExponentialMechanismInteractive(...).show()``."""
+
+    return ExponentialMechanismInteractive(
+        utilities,
+        sensitivity=sensitivity,
+        labels=labels,
+    ).show()

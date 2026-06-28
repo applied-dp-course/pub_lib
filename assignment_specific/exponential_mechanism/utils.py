@@ -45,24 +45,39 @@ def get_mean_median_estimation_error(
     )
 
 
-def plot_estimations(
+def make_estimations_figure(
     estimation_function, epsilon: float, experiments_number: int, seed=0, **kwargs
 ):
-    """Plot distribution of median estimations."""
+    from matplotlib import pyplot as plt
+
     grades = get_random_grades(seed=seed)
     exact_median = np.median(grades)
     median_estimations = [
         estimation_function(grades, epsilon=epsilon, **kwargs) for _ in range(experiments_number)
     ]
 
-    plt.axvline(exact_median, color='green', label='exact median')
-    plt.hist(
+    fig, ax = plt.subplots()
+    ax.axvline(exact_median, color='green', label='exact median')
+    ax.hist(
         median_estimations, density=True, color='blue', label='median estimations', bins=range(101)
     )
-    plt.xlim(MIN_GRADE, MAX_GRADE)
-    plt.title("Median Estimations Distribution")
-    plt.legend()
-    plt.show()
+    ax.set_xlim(MIN_GRADE, MAX_GRADE)
+    ax.set_title("Median Estimations Distribution")
+    ax.legend()
+    return fig
+
+
+def plot_estimations(
+    estimation_function, epsilon: float, experiments_number: int, seed=0, **kwargs
+):
+    """Plot distribution of median estimations."""
+    from IPython.display import display
+
+    fig = make_estimations_figure(
+        estimation_function, epsilon, experiments_number, seed=seed, **kwargs
+    )
+    display(fig)
+    return fig
 
 
 def generate_pairings(n):

@@ -1471,6 +1471,8 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         return None
 
     def widget(self, **renderer_options):
+        """Internal ipywidgets renderer for live notebook use; prefer ``.show()`` in new code."""
+
         from .interactive_widgets import render_ipywidgets
 
         return render_ipywidgets(
@@ -2436,6 +2438,8 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
             display(self._rendered.root)
 
     def widget(self, **renderer_options):
+        """Internal ipywidgets renderer for live notebook use; prefer ``.show()`` in new code."""
+
         from .interactive_widgets import render_ipywidgets
 
         return render_ipywidgets(

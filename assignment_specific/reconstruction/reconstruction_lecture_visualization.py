@@ -55,7 +55,7 @@ _PINNED_COLORS = {
 }
 
 
-def _display_figure(fig: plt.Figure | None = None) -> None:
+def _display_figure(fig: plt.Figure | None = None) -> plt.Figure:
     """Display a figure in Jupyter without Agg ``plt.show()`` warnings."""
     if fig is None:
         fig = plt.gcf()
@@ -65,9 +65,9 @@ def _display_figure(fig: plt.Figure | None = None) -> None:
 
         display(fig)
     except NameError:
-        if not plt.get_backend().lower().endswith("agg"):
-            plt.show()
+        pass
     plt.close(fig)
+    return fig
 
 
 def _exact_line_anchor_2d(
@@ -565,12 +565,12 @@ def interactive_2d_slab() -> Any:
     return rendered.root
 
 
-def plot_query_matrix_overview(
+def make_query_matrix_overview_figure(
     Q: np.ndarray,
     b: np.ndarray,
     r: np.ndarray,
     exact: np.ndarray | None = None,
-) -> None:
+) -> plt.Figure:
     """
     V0 overview: query matrix heatmap, secret barcode, and answer dot plot.
 
@@ -664,10 +664,20 @@ def plot_query_matrix_overview(
     )
 
     fig.subplots_adjust(right=0.82)
-    _display_figure(fig)
+    return fig
 
 
-def plot_candidate_elimination_panels(
+def plot_query_matrix_overview(
+    Q: np.ndarray,
+    b: np.ndarray,
+    r: np.ndarray,
+    exact: np.ndarray | None = None,
+) -> plt.Figure:
+    fig = make_query_matrix_overview_figure(Q, b, r, exact=exact)
+    return _display_figure(fig)
+
+
+def make_candidate_elimination_panels_figure(
     hamming_dist: np.ndarray,
     max_residual: np.ndarray,
     feasible: np.ndarray,
@@ -676,7 +686,7 @@ def plot_candidate_elimination_panels(
     *,
     m: int | None = None,
     true_index: int | None = None,
-) -> None:
+) -> plt.Figure:
     """
     Scatter of max ``\\ell_\\infty`` residual versus Hamming distance for all candidates.
 
@@ -736,4 +746,26 @@ def plot_candidate_elimination_panels(
         y=1.02,
     )
     fig.tight_layout()
-    _display_figure(fig)
+    return fig
+
+
+def plot_candidate_elimination_panels(
+    hamming_dist: np.ndarray,
+    max_residual: np.ndarray,
+    feasible: np.ndarray,
+    alpha: float,
+    n: int,
+    *,
+    m: int | None = None,
+    true_index: int | None = None,
+) -> plt.Figure:
+    fig = make_candidate_elimination_panels_figure(
+        hamming_dist,
+        max_residual,
+        feasible,
+        alpha,
+        n,
+        m=m,
+        true_index=true_index,
+    )
+    return _display_figure(fig)

@@ -1,3 +1,5 @@
+"""Legacy interactive plot wrapper — prefer ``InteractiveSpec`` and ``AbstractInteractivePlot``."""
+
 import plotly.graph_objects as go
 from IPython.display import display
 
@@ -48,6 +50,7 @@ class PlotMetaData:
 
 
 class InteractivePlot:
+    """Legacy API — use ``InteractiveSpec`` with ``render_ipywidgets`` or ``AbstractInteractivePlot``."""
     def __init__(
         self,
         sliders_data: list[PlotSlider],
@@ -110,6 +113,8 @@ class InteractivePlot:
             make_figure=make_figure,
             figure_factory=f"{__name__}:InteractivePlot",
         )
+        # Compatibility path: legacy callers construct ``InteractivePlot`` directly
+        # instead of using ``AbstractInteractivePlot.show()``.
         self._rendered = render_ipywidgets(spec)
         self.fig = self._rendered.figure
         self.sliders = list(self._rendered.controls.values())

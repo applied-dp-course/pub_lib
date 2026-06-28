@@ -40,6 +40,7 @@ __all__ = [
     "HAS_PLOTLY",
     "HAS_WIDGETS",
     "interactive_3d_slabs",
+    "make_3d_out_of_cube_example_figure",
     "plot_3d_out_of_cube_example",
 ]
 
@@ -836,11 +837,11 @@ def _loss_ellipsoid_trace(
     )
 
 
-def plot_3d_out_of_cube_example(
+def make_3d_out_of_cube_example_figure(
     alpha: float = 0.2,
     *,
     show_loss_level: bool = False,
-) -> None:
+) -> go.Figure:
     """
     Visualize the OLS out-of-cube counterexample.
 
@@ -1216,4 +1217,21 @@ def plot_3d_out_of_cube_example(
         row=1,
         col=2,
     )
-    fig.show()
+    return fig
+
+
+def plot_3d_out_of_cube_example(
+    alpha: float = 0.2,
+    *,
+    show_loss_level: bool = False,
+) -> go.Figure:
+    """Compatibility wrapper that displays the out-of-cube counterexample figure."""
+
+    from IPython.display import display
+
+    fig = make_3d_out_of_cube_example_figure(
+        alpha=alpha,
+        show_loss_level=show_loss_level,
+    )
+    display(fig)
+    return fig

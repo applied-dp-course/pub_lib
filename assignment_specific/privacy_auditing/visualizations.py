@@ -13,6 +13,7 @@ from libdpy.visualization.interactive import (
     ActionSpec,
     ControlSpec,
     InteractiveSpec,
+    SpecInteractivePlot,
 )
 from libdpy.assignment_specific.privacy_auditing.utils import (
     run_repeated_gaussian_audits,
@@ -157,15 +158,11 @@ def binomial_beta_bounds_spec(*, log_y: bool = False) -> InteractiveSpec:
 
 
 def binomial_alpha_bounds_interactive():
-    from libdpy.visualization.interactive_widgets import render_ipywidgets
-
-    return render_ipywidgets(binomial_alpha_bounds_spec()).root
+    return SpecInteractivePlot(binomial_alpha_bounds_spec()).show()
 
 
 def binomial_beta_bounds_interactive(*, log_y: bool = False):
-    from libdpy.visualization.interactive_widgets import render_ipywidgets
-
-    return render_ipywidgets(binomial_beta_bounds_spec(log_y=log_y)).root
+    return SpecInteractivePlot(binomial_beta_bounds_spec(log_y=log_y)).show()
 
 
 def make_naive_safe_epsilon_histogram_figure(
@@ -328,31 +325,6 @@ def naive_safe_epsilon_histogram_spec(
     )
 
 
-def naive_safe_epsilon_histogram_interactive(
-    *,
-    scale: float = 1.0,
-    tau: float = 0.5,
-    delta: float = 1e-2,
-    n_audit: int = 500,
-    alpha_total: float = 0.05,
-    n_repeats: int = 200,
-    seed: int = 0,
-):
-    from libdpy.visualization.interactive_widgets import render_ipywidgets
-
-    return render_ipywidgets(
-        naive_safe_epsilon_histogram_spec(
-            scale=scale,
-            tau=tau,
-            delta=delta,
-            n_audit=n_audit,
-            alpha_total=alpha_total,
-            n_repeats=n_repeats,
-            seed=seed,
-        )
-    ).root
-
-
 class NaiveSafeEpsilonHistogram(AbstractInteractivePlot):
     """Embeddable wrapper for the naive-vs-safe epsilon histogram explorer.
 
@@ -383,3 +355,24 @@ class NaiveSafeEpsilonHistogram(AbstractInteractivePlot):
 
     def spec(self) -> InteractiveSpec:
         return naive_safe_epsilon_histogram_spec(**self._kwargs)
+
+
+def naive_safe_epsilon_histogram_interactive(
+    *,
+    scale: float = 1.0,
+    tau: float = 0.5,
+    delta: float = 1e-2,
+    n_audit: int = 500,
+    alpha_total: float = 0.05,
+    n_repeats: int = 200,
+    seed: int = 0,
+):
+    return NaiveSafeEpsilonHistogram(
+        scale=scale,
+        tau=tau,
+        delta=delta,
+        n_audit=n_audit,
+        alpha_total=alpha_total,
+        n_repeats=n_repeats,
+        seed=seed,
+    ).show()

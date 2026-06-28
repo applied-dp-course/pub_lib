@@ -16,11 +16,20 @@ from typing import Any, Literal, MutableMapping
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 
-Backend = Literal["ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"]
+Backend = Literal["ipywidgets", "plotly-declarative", "wasm-marimo"]
 ControlKind = Literal["slider", "select", "checkbox", "button_group", "toggle_button"]
 SliderScale = Literal["linear", "log"]
 
-_VALID_BACKENDS = frozenset({"ipywidgets", "plotly-declarative", "wasm-marimo", "wasm-jupyterlite"})
+_VALID_BACKENDS = frozenset({"ipywidgets", "plotly-declarative", "wasm-marimo"})
+_MARIMO_SUPPORTED_CONTROL_KINDS = frozenset(
+    {"slider", "select", "button_group", "checkbox", "toggle_button"}
+)
+
+
+def marimo_supported_control_kinds() -> frozenset[str]:
+    """Return control kinds that the marimo WASM exporter can render today."""
+
+    return _MARIMO_SUPPORTED_CONTROL_KINDS
 _VALID_CONTROL_KINDS = frozenset(
     {"slider", "select", "checkbox", "button_group", "toggle_button"}
 )
@@ -483,12 +492,12 @@ def marimo_app_source(
         raise ValueError(f"{spec.name} does not allow the wasm-marimo backend")
     if PurePosixPath(wheel_filename).name != wheel_filename or not wheel_filename.endswith(".whl"):
         raise ValueError("wheel_filename must be a wheel basename")
-    supported_kinds = {"slider", "checkbox", "toggle_button"}
+    supported_kinds = marimo_supported_control_kinds()
     unsupported = [control.kind for control in spec.controls if control.kind not in supported_kinds]
     if unsupported:
         raise NotImplementedError(
-            "the marimo renderer supports sliders, checkboxes, and toggle buttons; "
-            f"unsupported controls: {sorted(set(unsupported))}"
+            "the marimo renderer supports sliders, selects, button groups, checkboxes, "
+            f"and toggle buttons; unsupported controls: {sorted(set(unsupported))}"
         )
 
     # Each action is modelled as a button accumulator that advances one state key.
@@ -516,6 +525,18 @@ def marimo_app_source(
                 f"start={control.min!r}, stop={control.max!r}, step={control.step!r}, "
                 f"value={control.default!r}, label={control.label!r}, "
                 "show_value=True, full_width=True)"
+            )
+        elif control.kind == "select":
+            options = json.dumps(list(control.values), sort_keys=True)
+            control_lines.append(
+                f"    {control.name} = mo.ui.dropdown("
+                f"options={options}, value={control.default!r}, label={control.label!r})"
+            )
+        elif control.kind == "button_group":
+            options = json.dumps(list(control.values), sort_keys=True)
+            control_lines.append(
+                f"    {control.name} = mo.ui.radio("
+                f"options={options}, value={control.default!r}, label={control.label!r})"
             )
         elif control.kind == "checkbox":
             control_lines.append(

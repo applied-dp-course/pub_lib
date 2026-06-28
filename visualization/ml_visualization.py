@@ -1,22 +1,29 @@
 from typing import Dict
 
 import numpy as np
+from IPython.display import display
 from matplotlib import pyplot as plt
 from sklearn.metrics import auc, roc_curve
 
 
-def plot_weight(predictor, title="", cmap='gray'):
+def make_weight_figure(predictor, title="", cmap='gray'):
     new_size = int(np.sqrt(predictor.shape[0]))
     predictor = predictor[: new_size**2].reshape(new_size, new_size)
-    plt.imshow(predictor, cmap=cmap)
-    plt.colorbar()
-    plt.title(f"Weight Visualization " + title)
-    plt.show()
+    fig, ax = plt.subplots()
+    ax.imshow(predictor, cmap=cmap)
+    fig.colorbar(ax.images[0], ax=ax)
+    ax.set_title(f"Weight Visualization {title}")
+    return fig
+
+
+def plot_weight(predictor, title="", cmap='gray'):
+    fig = make_weight_figure(predictor, title=title, cmap=cmap)
+    display(fig)
+    return fig
 
 
 def plot_confusion_matrix(confusion_matrix, ax, accuracy, classes, prefix):
     im = ax.imshow(confusion_matrix, cmap='cool')
-    # print the confusion matrix values in white
     for i in range(len(classes)):
         for j in range(len(classes)):
             ax.text(j, i, f'{confusion_matrix[i, j]:.3f}', ha='center', va='center', color='black')
@@ -29,18 +36,24 @@ def plot_confusion_matrix(confusion_matrix, ax, accuracy, classes, prefix):
     ax.set_ylabel('True')
 
 
-def plot_confusion_matrixes(confusion_matrix_train, confusion_matrix_test, classes):
+def make_confusion_matrixes_figure(confusion_matrix_train, confusion_matrix_test, classes):
     train_accuracy = np.trace(confusion_matrix_train) / len(classes)
     test_accuracy = np.trace(confusion_matrix_test) / len(classes)
     fig, ax = plt.subplots(1, 2)
     fig.set_size_inches(12, 6)
-    plt.title('Confusion Matrixes')
+    fig.suptitle('Confusion Matrixes')
     plot_confusion_matrix(confusion_matrix_train, ax[0], train_accuracy, classes, 'Train')
     plot_confusion_matrix(confusion_matrix_test, ax[1], test_accuracy, classes, 'Test')
-    plt.show()
+    return fig
 
 
-def plot_binned_classification_grid(
+def plot_confusion_matrixes(confusion_matrix_train, confusion_matrix_test, classes):
+    fig = make_confusion_matrixes_figure(confusion_matrix_train, confusion_matrix_test, classes)
+    display(fig)
+    return fig
+
+
+def make_binned_classification_grid_figure(
     data_by_class_and_bin, num_samples, probability_bins=[0, 0.5, 0.75, 0.9, 1], seed=None
 ):
     rng = np.random.default_rng(seed)
@@ -48,26 +61,15 @@ def plot_binned_classification_grid(
     num_bins = len(probability_bins) - 1
     data_dim = int(np.sqrt(data_by_class_and_bin[0][0].shape[1]))
 
-    # Create figure and adjust subplot parameters
     fig = plt.figure(figsize=(3 * num_bins, 3 * num_classes * num_samples))
-
-    # Add title with padding
     fig.suptitle("Representative samples by prediction confidence", fontsize=20, y=0.98)
-
-    # Adjust the layout to make room for title
     gs = plt.GridSpec(num_classes * num_samples, num_bins)
-    gs.update(wspace=0.05, hspace=0.05)  # Reduce spacing between subplots
-
-    # Create axes array
+    gs.update(wspace=0.05, hspace=0.05)
     axs = np.empty((num_classes * num_samples, num_bins), dtype=object)
 
-    # Plot samples
     for class_idx in range(num_classes):
         for bin_idx in range(num_bins):
-            # Get data for this class and bin
             bin_data = data_by_class_and_bin[class_idx][bin_idx]
-
-            # Plot each sample
             for sample_idx in range(num_samples):
                 row_idx = class_idx * num_samples + sample_idx
                 ax = fig.add_subplot(gs[row_idx, bin_idx])
@@ -85,13 +87,11 @@ def plot_binned_classification_grid(
                         )
                 ax.axis('off')
 
-    # Add bin ranges on top row
     for bin_idx in range(num_bins):
         axs[0, bin_idx].set_title(
             f'[{probability_bins[bin_idx]:.2f},\n{probability_bins[bin_idx+1]:.2f})', pad=10
         )
 
-    # Add class labels on the left with adjusted position
     for class_idx in range(num_classes):
         row_idx = class_idx * num_samples
         fig.text(
@@ -103,7 +103,6 @@ def plot_binned_classification_grid(
             fontsize=16,
         )
 
-    # Add horizontal lines between classes
     for class_idx in range(1, num_classes):
         y_coord = 0.975 - class_idx * num_samples / (num_classes * num_samples)
         fig.add_artist(
@@ -117,7 +116,6 @@ def plot_binned_classification_grid(
             )
         )
 
-    # Add vertical lines between bins
     for bin_idx in range(1, num_bins):
         x_coord = 0.045 + bin_idx * 0.91 / num_bins
         fig.add_artist(
@@ -131,9 +129,18 @@ def plot_binned_classification_grid(
             )
         )
 
-    # Adjust subplot parameters to make room for title
-    plt.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.05)
-    plt.show()
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.05)
+    return fig
+
+
+def plot_binned_classification_grid(
+    data_by_class_and_bin, num_samples, probability_bins=[0, 0.5, 0.75, 0.9, 1], seed=None
+):
+    fig = make_binned_classification_grid_figure(
+        data_by_class_and_bin, num_samples, probability_bins=probability_bins, seed=seed
+    )
+    display(fig)
+    return fig
 
 
 def create_dual_histogram(v1, v2, num_bins):
@@ -144,7 +151,9 @@ def create_dual_histogram(v1, v2, num_bins):
     return bin_edges
 
 
-def plot_distributions_and_ROC(positive_samples, negative_samples, title, n_bins=None):
+def make_distributions_and_roc_figure(
+    positive_samples, negative_samples, title, n_bins=None
+):
     if n_bins is None:
         n_bins = int(np.sqrt(len(positive_samples) + len(negative_samples)))
 
@@ -152,7 +161,6 @@ def plot_distributions_and_ROC(positive_samples, negative_samples, title, n_bins
     ax1 = fig.add_subplot(121)
     ax2 = fig.add_subplot(122)
 
-    # plot_joint_histograms(ax1, positive_samples, negative_samples, n_bins)
     bin_edges = create_dual_histogram(positive_samples, negative_samples, n_bins)
     ax1.hist(
         positive_samples,
@@ -170,27 +178,30 @@ def plot_distributions_and_ROC(positive_samples, negative_samples, title, n_bins
         color='red',
         label='Empirical Negative',
     )
-
     ax1.set_title('Probability Density Functions')
     ax1.set_xlabel('Score')
     ax1.set_ylabel('Probability Density')
     ax1.legend()
     ax1.grid(True)
 
-    # Plot ROC curve
     labels = np.concatenate([np.zeros(len(negative_samples)), np.ones(len(positive_samples))])
     samples = np.concatenate([negative_samples, positive_samples])
     fpr_emp, tpr_emp, _ = roc_curve(labels, samples)
-
-    ax2.plot(fpr_emp, tpr_emp, 'g--', label=f'Empirical ROC')
+    ax2.plot(fpr_emp, tpr_emp, 'g--', label='Empirical ROC')
     ax2.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
-
     ax2.set_xlabel('False Positive Rate')
     ax2.set_ylabel('True Positive Rate')
     ax2.set_title('ROC Curves')
     ax2.legend()
     ax2.grid(True)
+    fig.suptitle(title)
+    fig.tight_layout()
+    return fig
 
-    plt.suptitle(title)
-    plt.tight_layout()
-    plt.show()
+
+def plot_distributions_and_ROC(positive_samples, negative_samples, title, n_bins=None):
+    fig = make_distributions_and_roc_figure(
+        positive_samples, negative_samples, title, n_bins=n_bins
+    )
+    display(fig)
+    return fig

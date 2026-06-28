@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from statistics import NormalDist
 
 import plotly.graph_objects as go
+from IPython.display import display
 
 from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
 
@@ -314,7 +315,11 @@ def privacy_plot_ipywidgets(
     epsilon: float = _DEFAULT_EPSILON,
     delta: float = _DEFAULT_DELTA,
 ):
-    """Return the established widget root through the shared renderer."""
+    """Compatibility launcher for legacy callers.
+
+    Prefer ``PrivacyPlot(...).show()`` for new notebook and Colab content. This
+    helper bypasses the public wrapper and calls ``render_ipywidgets`` directly.
+    """
 
     from .interactive_widgets import render_ipywidgets
 
@@ -379,31 +384,47 @@ class PrivacyPlot(AbstractInteractivePlot):
 def plot_epsilon_delta_tradeoff(
     epsilons, deltas, mechanism_names=None, title="Privacy Budget Trade-off"
 ):
+    fig = make_epsilon_delta_tradeoff_figure(
+        epsilons, deltas, mechanism_names=mechanism_names, title=title
+    )
+    display(fig)
+    return fig
+
+
+def make_epsilon_delta_tradeoff_figure(
+    epsilons, deltas, mechanism_names=None, title="Privacy Budget Trade-off"
+):
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     if mechanism_names is None:
         mechanism_names = [f"Mechanism {i+1}" for i in range(len(epsilons))]
 
     for i, (eps_list, delta_list, name) in enumerate(zip(epsilons, deltas, mechanism_names)):
-        plt.plot(eps_list, delta_list, "o-", label=name, linewidth=2, markersize=6)
+        ax.plot(eps_list, delta_list, "o-", label=name, linewidth=2, markersize=6)
 
-    plt.xlabel("Privacy Budget (ε)")
-    plt.ylabel("Failure Probability (δ)")
-    plt.title(title)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.yscale("log")
-    plt.xscale("log")
-    plt.show()
+    ax.set_xlabel("Privacy Budget (ε)")
+    ax.set_ylabel("Failure Probability (δ)")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_yscale("log")
+    ax.set_xscale("log")
+    return fig
 
 
 def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss Distribution"):
+    fig = make_privacy_loss_distribution_figure(privacy_losses, epsilon, title=title)
+    display(fig)
+    return fig
+
+
+def make_privacy_loss_distribution_figure(privacy_losses, epsilon, title="Privacy Loss Distribution"):
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(
         privacy_losses,
         bins=50,
         density=True,
@@ -411,63 +432,69 @@ def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss 
         color="lightblue",
         edgecolor="black",
     )
-
-    # Add vertical line at epsilon
-    plt.axvline(epsilon, color="red", linestyle="--", linewidth=2, label=f"ε = {epsilon}")
-    plt.axvline(-epsilon, color="red", linestyle="--", linewidth=2, label=f"-ε = {-epsilon}")
-
-    plt.xlabel("Privacy Loss")
-    plt.ylabel("Density")
-    plt.title(title)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
+    ax.axvline(epsilon, color="red", linestyle="--", linewidth=2, label=f"ε = {epsilon}")
+    ax.axvline(-epsilon, color="red", linestyle="--", linewidth=2, label=f"-ε = {-epsilon}")
+    ax.set_xlabel("Privacy Loss")
+    ax.set_ylabel("Density")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return fig
 
 
 def plot_roc_curves(fpr_list, tpr_list, labels=None, title="ROC Curves Comparison"):
+    fig = make_roc_curves_figure(fpr_list, tpr_list, labels=labels, title=title)
+    display(fig)
+    return fig
+
+
+def make_roc_curves_figure(fpr_list, tpr_list, labels=None, title="ROC Curves Comparison"):
     import matplotlib.pyplot as plt
     import numpy as np
 
-    plt.figure(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     if labels is None:
         labels = [f"Model {i+1}" for i in range(len(fpr_list))]
 
     for fpr, tpr, label in zip(fpr_list, tpr_list, labels):
-        auc = np.trapz(tpr, fpr)
-        plt.plot(fpr, tpr, linewidth=2, label=f"{label} (AUC = {auc:.3f})")
+        auc_value = np.trapz(tpr, fpr)
+        ax.plot(fpr, tpr, linewidth=2, label=f"{label} (AUC = {auc_value:.3f})")
 
-    # Add diagonal line
-    plt.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Random Classifier")
-
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title(title)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.xlim([0, 1])
-    plt.ylim([0, 1])
-    plt.show()
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Random Classifier")
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1])
+    return fig
 
 
 def plot_privacy_accounting(epsilons, steps, title="Privacy Budget Consumption"):
+    fig = make_privacy_accounting_figure(epsilons, steps, title=title)
+    display(fig)
+    return fig
+
+
+def make_privacy_accounting_figure(epsilons, steps, title="Privacy Budget Consumption"):
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(steps, epsilons, "b-", linewidth=2, marker="o", markersize=4)
-    plt.xlabel("Training Steps")
-    plt.ylabel("Cumulative Privacy Budget (ε)")
-    plt.title(title)
-    plt.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(steps, epsilons, "b-", linewidth=2, marker="o", markersize=4)
+    ax.set_xlabel("Training Steps")
+    ax.set_ylabel("Cumulative Privacy Budget (ε)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
 
-    # Add horizontal lines for common privacy budgets
     privacy_levels = [0.1, 1.0, 10.0]
     colors = ["green", "orange", "red"]
     labels = ["Strong Privacy", "Moderate Privacy", "Weak Privacy"]
 
     for level, color, label in zip(privacy_levels, colors, labels):
         if level <= max(epsilons):
-            plt.axhline(
+            ax.axhline(
                 level,
                 color=color,
                 linestyle="--",
@@ -475,5 +502,5 @@ def plot_privacy_accounting(epsilons, steps, title="Privacy Budget Consumption")
                 label=f"{label} (ε={level})",
             )
 
-    plt.legend()
-    plt.show()
+    ax.legend()
+    return fig

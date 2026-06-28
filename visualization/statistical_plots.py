@@ -6,14 +6,14 @@ from IPython.display import display
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm
 
-from .interactive import ControlSpec, InteractiveSpec
-from .interactive_widgets import render_ipywidgets
+from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
 
 
-# Used by notebook0
-def plot_histogram(data, title="", x_label="", show_kde=False, bins=50):
-    plt.figure(figsize=(8, 6))
-    plt.hist(
+def make_histogram_figure(data, title="", x_label="", show_kde=False, bins=50):
+    """Build a histogram figure without displaying it."""
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.hist(
         data,
         bins=bins,
         density=True,
@@ -23,12 +23,19 @@ def plot_histogram(data, title="", x_label="", show_kde=False, bins=50):
     )
     if show_kde:
         x = np.linspace(min(data), max(data), 1000)
-        plt.plot(x, norm.pdf(x, 0, 1), 'k-', label='Theoretical Standard N(0,1)')
-    plt.title(title)
-    plt.xlabel(x_label)
-    plt.ylabel("Density")
-    plt.legend()
-    plt.show()
+        ax.plot(x, norm.pdf(x, 0, 1), 'k-', label='Theoretical Standard N(0,1)')
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Density")
+    ax.legend()
+    return fig
+
+
+# Used by notebook0
+def plot_histogram(data, title="", x_label="", show_kde=False, bins=50):
+    fig = make_histogram_figure(data, title=title, x_label=x_label, show_kde=show_kde, bins=bins)
+    display(fig)
+    return fig
 
 
 def generate_normalized_samples(
@@ -143,18 +150,18 @@ def clt_plot_spec(
 
 # Used by notebook 0
 def plot_CLT_with_sample_slider(normalization_func):
-    rendered = render_ipywidgets(clt_plot_spec(normalization_func))
-    display(rendered.root)
-    return rendered.root
+    from .interactive import SpecInteractivePlot
+
+    return SpecInteractivePlot(clt_plot_spec(normalization_func)).show()
 
 
-def plot_normal_distribution_comparison(
+def make_normal_distribution_comparison_figure(
     data, theoretical_mean=0, theoretical_std=1, title="Distribution Comparison"
 ):
-    plt.figure(figsize=(10, 6))
+    """Build a normal-distribution comparison figure without displaying it."""
 
-    # Plot histogram of data
-    plt.hist(
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(
         data,
         bins=50,
         density=True,
@@ -163,37 +170,47 @@ def plot_normal_distribution_comparison(
         edgecolor='black',
         label=f'Empirical Data\nMean: {np.mean(data):.3f}\nStd: {np.std(data):.3f}',
     )
-
-    # Plot theoretical normal distribution
     x = np.linspace(
         min(data.min(), theoretical_mean - 4 * theoretical_std),
         max(data.max(), theoretical_mean + 4 * theoretical_std),
         1000,
     )
     theoretical_pdf = norm.pdf(x, theoretical_mean, theoretical_std)
-    plt.plot(
+    ax.plot(
         x,
         theoretical_pdf,
         'r-',
         linewidth=2,
         label=f'Theoretical N({theoretical_mean},{theoretical_std}²)',
     )
-
-    # Plot KDE of empirical data
     kde = gaussian_kde(data)
-    plt.plot(x, kde(x), 'g--', linewidth=2, label='Empirical KDE')
+    ax.plot(x, kde(x), 'g--', linewidth=2, label='Empirical KDE')
+    ax.set_title(title)
+    ax.set_xlabel('Value')
+    ax.set_ylabel('Density')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return fig
 
-    plt.title(title)
-    plt.xlabel('Value')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
+
+def plot_normal_distribution_comparison(
+    data, theoretical_mean=0, theoretical_std=1, title="Distribution Comparison"
+):
+    fig = make_normal_distribution_comparison_figure(
+        data,
+        theoretical_mean=theoretical_mean,
+        theoretical_std=theoretical_std,
+        title=title,
+    )
+    display(fig)
+    return fig
 
 
-def plot_convergence_to_normal(
+def make_convergence_to_normal_figure(
     sample_sizes, lower_bound=-3, upper_bound=8, normalization_func=None
 ):
+    """Build a CLT convergence grid figure without displaying it."""
+
     if normalization_func is None:
 
         def default_normalization(sums, mean, std_dev, n):
@@ -208,7 +225,6 @@ def plot_convergence_to_normal(
         normalized_samples = generate_normalized_samples(
             n, lower_bound, upper_bound, normalization_func
         )
-
         axes[i].hist(
             normalized_samples,
             bins=30,
@@ -217,25 +233,37 @@ def plot_convergence_to_normal(
             color='lightblue',
             edgecolor='black',
         )
-
-        # Overlay theoretical normal
         x = np.linspace(-4, 4, 100)
         axes[i].plot(x, norm.pdf(x, 0, 1), 'r-', linewidth=2, label='N(0,1)')
-
         axes[i].set_title(f'Sample Size: {n}')
         axes[i].set_xlabel('Normalized Value')
         axes[i].set_ylabel('Density')
         axes[i].legend()
         axes[i].grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.suptitle('Central Limit Theorem: Convergence to Normal Distribution', y=1.02)
-    plt.show()
+    fig.tight_layout()
+    fig.suptitle('Central Limit Theorem: Convergence to Normal Distribution', y=1.02)
+    return fig
 
 
-def plot_sample_means_distribution(
+def plot_convergence_to_normal(
+    sample_sizes, lower_bound=-3, upper_bound=8, normalization_func=None
+):
+    fig = make_convergence_to_normal_figure(
+        sample_sizes,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        normalization_func=normalization_func,
+    )
+    display(fig)
+    return fig
+
+
+def make_sample_means_distribution_figure(
     num_experiments=1000, sample_size=30, population_dist='uniform', seed=None
 ):
+    """Build a sample-means distribution figure without displaying it."""
+
     rng = np.random.default_rng(seed)
     sample_means = []
 
@@ -253,8 +281,8 @@ def plot_sample_means_distribution(
 
     sample_means = np.array(sample_means)
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(
         sample_means,
         bins=50,
         density=True,
@@ -264,10 +292,9 @@ def plot_sample_means_distribution(
         label=f'Sample Means\nMean: {np.mean(sample_means):.3f}\nStd: {np.std(sample_means):.3f}',
     )
 
-    # Theoretical distribution of sample means
     if population_dist == 'uniform':
-        pop_mean = 2.5  # (-3 + 8) / 2
-        pop_std = np.sqrt(((8 - (-3)) ** 2) / 12)  # Uniform distribution std
+        pop_mean = 2.5
+        pop_std = np.sqrt(((8 - (-3)) ** 2) / 12)
     elif population_dist == 'exponential':
         pop_mean = 2
         pop_std = 2
@@ -278,53 +305,69 @@ def plot_sample_means_distribution(
         pop_mean = 0
         pop_std = 1
 
-        theoretical_mean = pop_mean
-        theoretical_std = pop_std / np.sqrt(sample_size)
+    theoretical_mean = pop_mean
+    theoretical_std = pop_std / np.sqrt(sample_size)
+    x = np.linspace(sample_means.min(), sample_means.max(), 100)
+    theoretical_pdf = norm.pdf(x, theoretical_mean, theoretical_std)
+    ax.plot(
+        x,
+        theoretical_pdf,
+        'r-',
+        linewidth=2,
+        label=f'Theoretical N({theoretical_mean:.2f},{theoretical_std:.3f}²)',
+    )
 
-        x = np.linspace(sample_means.min(), sample_means.max(), 100)
-        theoretical_pdf = norm.pdf(x, theoretical_mean, theoretical_std)
-        plt.plot(
-            x,
-            theoretical_pdf,
-            'r-',
-            linewidth=2,
-            label=f'Theoretical N({theoretical_mean:.2f},{theoretical_std:.3f}²)',
-        )
-
-    plt.title(
+    ax.set_title(
         f'Distribution of Sample Means\n{population_dist.capitalize()} Population, Sample Size: {sample_size}'
     )
-    plt.xlabel('Sample Mean')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
+    ax.set_xlabel('Sample Mean')
+    ax.set_ylabel('Density')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return fig
 
 
-def plot_laplace_distributions(b, loc1, loc2):
-    # Generate x values
+def plot_sample_means_distribution(
+    num_experiments=1000, sample_size=30, population_dist='uniform', seed=None
+):
+    fig = make_sample_means_distribution_figure(
+        num_experiments=num_experiments,
+        sample_size=sample_size,
+        population_dist=population_dist,
+        seed=seed,
+    )
+    display(fig)
+    return fig
+
+
+def make_laplace_distributions_figure(b, loc1, loc2):
+    """Build a Matplotlib Laplace comparison figure without displaying it."""
+
     x = np.linspace(50, 60, 1000)
 
-    # Calculate Laplace distributions
-    def laplace_pdf(x, loc, b):
-        return 1 / (2 * b) * np.exp(-np.abs(x - loc) / b)
+    def laplace_pdf(x_vals, loc, scale):
+        return 1 / (2 * scale) * np.exp(-np.abs(x_vals - loc) / scale)
 
     y1 = laplace_pdf(x, loc1, b)
     y2 = laplace_pdf(x, loc2, b)
 
-    # Create plot with fixed y-axis
-    plt.figure(figsize=(6, 4))
-    plt.plot(x, y1, label=f'Dist 1', color='blue')
-    plt.plot(x, y2, label=f'Dist 2', color='red')
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(x, y1, label='Dist 1', color='blue')
+    ax.plot(x, y2, label='Dist 2', color='red')
+    ax.set_title('Laplace Distributions')
+    ax.set_xlabel('x')
+    ax.set_ylabel('Density')
+    ax.set_ylim(0, 2)
+    ax.legend(loc='best')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    fig.tight_layout()
+    return fig
 
-    plt.title('Laplace Distributions')
-    plt.xlabel('x')
-    plt.ylabel('Density')
-    plt.ylim(0, 2)  # Fix y-axis from 0 to 1
-    plt.legend(loc='best')
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    plt.show()
+
+def plot_laplace_distributions(b, loc1, loc2):
+    fig = make_laplace_distributions_figure(b, loc1, loc2)
+    display(fig)
+    return fig
 
 
 def make_laplace_comparison_figure(
@@ -383,15 +426,26 @@ def laplace_comparison_spec(loc1=55, loc2=56):
                 step=0.01,
             ),
         ),
-        preferred_backend="ipywidgets",
-        allowed_backends=("ipywidgets",),
+        preferred_backend="wasm-marimo",
+        allowed_backends=("ipywidgets", "wasm-marimo"),
         make_figure=make_laplace_comparison_figure,
         figure_factory=("libdpy.visualization.statistical_plots:make_laplace_comparison_figure"),
         fixed_kwargs={"loc1": loc1, "loc2": loc2},
     )
 
 
+class LaplaceComparison(AbstractInteractivePlot):
+    """Interactive Laplace scale comparison for notebooks and the static site."""
+
+    def __init__(self, loc1: float = 55, loc2: float = 56):
+        self.loc1 = float(loc1)
+        self.loc2 = float(loc2)
+
+    def spec(self) -> InteractiveSpec:
+        return laplace_comparison_spec(self.loc1, self.loc2)
+
+
 def create_laplace_interactive(loc1=55, loc2=56):
-    rendered = render_ipywidgets(laplace_comparison_spec(loc1, loc2))
-    display(rendered.root)
-    return rendered.root
+    """Backward-compatible launcher — prefer ``LaplaceComparison(...).show()``."""
+
+    return LaplaceComparison(loc1=loc1, loc2=loc2).show()

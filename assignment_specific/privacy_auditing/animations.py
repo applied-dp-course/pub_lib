@@ -361,9 +361,9 @@ def fixed_threshold_audit_animation_html(
 ) -> str:
     """Return Jupyter-playable HTML for a play-once fixed-threshold audit animation."""
 
-    from matplotlib.animation import FuncAnimation
+    from libdpy.visualization.animation_display import figure_animation_html
 
-    frame_figures = list(
+    return figure_animation_html(
         fixed_threshold_audit_frames_from_samples(
             samples_neg,
             samples_pos,
@@ -371,36 +371,10 @@ def fixed_threshold_audit_animation_html(
             seed=seed,
             delta=delta,
             n_frames=n_frames,
-        )
+        ),
+        fps=fps,
+        loop=False,
     )
-    if not frame_figures:
-        raise ValueError("animation produced no frames")
-
-    rasters: list[np.ndarray] = []
-    for frame_figure in frame_figures:
-        rasters.append(_rasterize_figure(frame_figure))
-        plt.close(frame_figure)
-
-    figure = plt.figure(figsize=_FRAME_FIGSIZE, dpi=_FRAME_DPI)
-    axis = figure.add_axes((0.0, 0.0, 1.0, 1.0))
-    axis.axis("off")
-    image = axis.imshow(rasters[0])
-
-    def _update(frame_index: int):
-        image.set_array(rasters[frame_index])
-        return [image]
-
-    animation = FuncAnimation(
-        figure,
-        _update,
-        frames=len(rasters),
-        interval=1000.0 / fps,
-        repeat=False,
-        blit=True,
-    )
-    html = animation.to_jshtml()
-    plt.close(figure)
-    return html
 
 
 _STANDALONE_PLAYER_TEMPLATE = (

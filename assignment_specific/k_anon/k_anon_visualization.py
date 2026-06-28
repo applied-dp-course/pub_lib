@@ -1,15 +1,8 @@
 import matplotlib.pyplot as plt
+from IPython.display import display
 
 
-def plot_histogram(df, title, column_to_drop, max_value=10):
-    '''
-    Plot the histogram of the anonymity levels of the equivalence classes in the dataset, where an equivilence class is a unique row (discarding the sensitive attribute) and the anonymity level is the number of times this equivalence class appears in the dataset.
-    :param df: the dataset
-    :param title: the title of the plot
-    :param column_to_drop: the sensitive attribute
-    :param max_value: the maximum value of the anonymity levels
-    :return: None
-    '''
+def make_anonymity_histogram_figure(df, title, column_to_drop, max_value=10):
     counts = (
         df.drop(columns=[column_to_drop])
         .groupby(list(df.columns.difference([column_to_drop])), observed=True)
@@ -17,9 +10,15 @@ def plot_histogram(df, title, column_to_drop, max_value=10):
     )
     histogram = counts.value_counts()
     histogram = histogram.reindex(range(1, max_value + 1), fill_value=0)
-    plt.figure(figsize=(10, 6))
-    histogram.plot(kind='bar')
-    plt.xlabel('Anonymity level')
-    plt.ylabel('Number of equivalence classes')
-    plt.title('Anonymity level Histogram in the ' + title + ' dataset')
-    plt.show()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    histogram.plot(kind='bar', ax=ax)
+    ax.set_xlabel('Anonymity level')
+    ax.set_ylabel('Number of equivalence classes')
+    ax.set_title('Anonymity level Histogram in the ' + title + ' dataset')
+    return fig
+
+
+def plot_histogram(df, title, column_to_drop, max_value=10):
+    fig = make_anonymity_histogram_figure(df, title, column_to_drop, max_value=max_value)
+    display(fig)
+    return fig

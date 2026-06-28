@@ -39,7 +39,7 @@ def above_threshold(
     return responses
 
 
-def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m, seed=None):
+def make_above_threshold_simulation_figure(epsilon_list, p, T, num_trials, n, m, seed=None):
     rng = np.random.default_rng(seed)
 
     # Set up a grid of subplots for visualizing histograms (one for each epsilon).
@@ -101,6 +101,15 @@ def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m, seed=None):
         # step 5: return the results
         # return halt_iterations, true_halt_values, correct_halts, missed_halts ### you can use this if needed
 
-    # Adjust layout and display the histograms.
-    plt.tight_layout()
-    plt.show()
+    fig.tight_layout()
+    return fig
+
+
+def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m, seed=None):
+    from IPython.display import display
+
+    fig = make_above_threshold_simulation_figure(
+        epsilon_list, p, T, num_trials, n, m, seed=seed
+    )
+    display(fig)
+    return fig

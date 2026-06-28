@@ -63,6 +63,25 @@ Everything under `requires_tensorflow/` needs the `[ml]` extra installed.
 
 Excluded from the coverage scope (plotting code).
 
+### Plotting policy
+
+Authors and website content should use three paths:
+
+| Path | Author API | Contract |
+|------|------------|----------|
+| Static figures | `make_*_figure(...)` | Returns `Figure` or `go.Figure`; no `show()` |
+| Live interactives | `Plot(...).show()` | `InteractiveSpec` rendered with ipywidgets |
+| Site interactives | `Plot(...).embed(...)` | Registered constructors export to marimo WASM |
+
+Legacy `plot_*` helpers that call `plt.show()` remain for notebook compatibility but should
+delegate to a `make_*_figure` factory and return the figure (these side-effect wrappers are
+slated for removal after one course cycle). Site-exportable interactives are
+registered in `visualization/registry.py` (including `LaplaceComparison` and
+`ExponentialMechanismInteractive`). Website animation embeds use `visualization/animation_embed.py`;
+external browser apps use `visualization/external_app_embed.py`.
+Pre-render inventory violations fail CI via `visualization/plot_inventory.py`; post-render checks
+(doubled defer attributes, full-page WASM route coverage) run after `quarto render`.
+
 | File | Provides |
 |------|----------|
 | `roc_plots.py` | Interactive ROC curves, distribution comparisons, threshold sliders |

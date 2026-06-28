@@ -42,13 +42,13 @@ def legacy_algorithm(database: list, rng: np.random.Generator | None = None) -> 
     return noised_value
 
 
-def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: int):
+def make_outputs_histograms_figure(algorithm: Callable, db0, db1, repetitions_number: int):
     from matplotlib import pyplot as plt
 
     results_0 = [algorithm(db0) for _ in range(repetitions_number)]
     results_1 = [algorithm(db1) for _ in range(repetitions_number)]
-    plt.figure(figsize=(8, 6))
-    plt.hist(
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.hist(
         results_0,
         bins=100,
         density=True,
@@ -56,7 +56,7 @@ def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: i
         edgecolor='black',
         label=f'Mean: {np.mean(results_0)}\nStandard deviation: {np.std(results_0)}',
     )
-    plt.hist(
+    ax.hist(
         results_1,
         bins=100,
         density=True,
@@ -64,14 +64,19 @@ def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: i
         edgecolor='yellow',
         label=f'Mean: {np.mean(results_1)}\nStandard deviation: {np.std(results_1)}',
     )
+    ax.set_title("Histograms of results")
+    ax.set_xlabel("result")
+    ax.set_ylabel("Density")
+    ax.legend()
+    return fig
 
-    plt.title("Histograms of results")
-    plt.xlabel("result")
-    plt.ylabel("Density")
-    plt.legend()
-    plt.show()
 
-    return
+def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: int):
+    from IPython.display import display
+
+    fig = make_outputs_histograms_figure(algorithm, db0, db1, repetitions_number)
+    display(fig)
+    return fig
 
 
 def epsilon_from_roc_point(fpr: float, tpr: float, delta: float) -> float:
