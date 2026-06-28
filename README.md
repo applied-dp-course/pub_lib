@@ -4,7 +4,21 @@ A Python library for **Differential Privacy** and **Privacy-Preserving Machine L
 
 ## Installation
 
-Install from the public repository:
+Install from the public repository.
+
+**Course notebooks** (live `.show()` widgets in Jupyter/Colab):
+
+```bash
+pip install "libdpy[notebook] @ git+https://github.com/applied-dp-course/pub_lib.git"
+```
+
+**ML notebooks** (TensorFlow / DP-SGD plus live widgets):
+
+```bash
+pip install "libdpy[ml,notebook] @ git+https://github.com/applied-dp-course/pub_lib.git"
+```
+
+**Base only** (figure factories and non-widget APIs — no ipywidgets):
 
 ```bash
 pip install "libdpy @ git+https://github.com/applied-dp-course/pub_lib.git"
@@ -12,10 +26,10 @@ pip install "libdpy @ git+https://github.com/applied-dp-course/pub_lib.git"
 
 ### Optional extras
 
-```bash
-# Machine learning features (TensorFlow, dp-accounting)
-pip install "libdpy[ml] @ git+https://github.com/applied-dp-course/pub_lib.git"
-```
+| Extra | Adds |
+|---|---|
+| `[notebook]` | `ipywidgets`, `anywidget` for `Plot(...).show()` |
+| `[ml]` | TensorFlow, dp-accounting |
 
 Requires Python 3.10.11 or newer.
 

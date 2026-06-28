@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from IPython.display import display
 
 
 def make_one_run_auditing_figure(df):
@@ -62,10 +61,4 @@ def make_one_run_auditing_figure(df):
         fontsize=8,
     )
     fig.subplots_adjust(bottom=0.4, top=1.3)
-    return fig
-
-
-def plot_one_run_auditing_experiement(df):
-    fig = make_one_run_auditing_figure(df)
-    display(fig)
     return fig

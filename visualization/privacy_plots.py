@@ -9,8 +9,6 @@ from collections.abc import Sequence
 from statistics import NormalDist
 
 import plotly.graph_objects as go
-from IPython.display import display
-
 from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
 
 _EPSILON_MAX = math.log(30)
@@ -307,34 +305,6 @@ def privacy_plot_spec(
     )
 
 
-def privacy_plot_ipywidgets(
-    distribution_types: Sequence = ("norm",),
-    sensitivity: float = 1.0,
-    std: float = 1.5,
-    res: int = 100,
-    epsilon: float = _DEFAULT_EPSILON,
-    delta: float = _DEFAULT_DELTA,
-):
-    """Compatibility launcher for legacy callers.
-
-    Prefer ``PrivacyPlot(...).show()`` for new notebook and Colab content. This
-    helper bypasses the public wrapper and calls ``render_ipywidgets`` directly.
-    """
-
-    from .interactive_widgets import render_ipywidgets
-
-    return render_ipywidgets(
-        privacy_plot_spec(
-            distribution_types,
-            sensitivity,
-            std,
-            res,
-            epsilon=epsilon,
-            delta=delta,
-        )
-    ).root
-
-
 class PrivacyPlot(AbstractInteractivePlot):
     """Privacy-bound explorer with notebook and static-site adapters."""
 
@@ -369,26 +339,10 @@ class PrivacyPlot(AbstractInteractivePlot):
             delta=self.delta,
         )
 
-    def show(self):
-        """Return the ipywidgets adapter for live-kernel notebooks."""
+    def show(self, **renderer_options):
+        """Display the live notebook widget."""
 
-        return privacy_plot_ipywidgets(
-            distribution_types=self.distribution_types,
-            sensitivity=self.sensitivity,
-            std=self.std,
-            res=self.res,
-            epsilon=self.epsilon,
-            delta=self.delta,
-        )
-
-def plot_epsilon_delta_tradeoff(
-    epsilons, deltas, mechanism_names=None, title="Privacy Budget Trade-off"
-):
-    fig = make_epsilon_delta_tradeoff_figure(
-        epsilons, deltas, mechanism_names=mechanism_names, title=title
-    )
-    display(fig)
-    return fig
+        return super().show(**renderer_options)
 
 
 def make_epsilon_delta_tradeoff_figure(
@@ -414,12 +368,6 @@ def make_epsilon_delta_tradeoff_figure(
     return fig
 
 
-def plot_privacy_loss_distribution(privacy_losses, epsilon, title="Privacy Loss Distribution"):
-    fig = make_privacy_loss_distribution_figure(privacy_losses, epsilon, title=title)
-    display(fig)
-    return fig
-
-
 def make_privacy_loss_distribution_figure(privacy_losses, epsilon, title="Privacy Loss Distribution"):
     import matplotlib.pyplot as plt
 
@@ -439,12 +387,6 @@ def make_privacy_loss_distribution_figure(privacy_losses, epsilon, title="Privac
     ax.set_title(title)
     ax.legend()
     ax.grid(True, alpha=0.3)
-    return fig
-
-
-def plot_roc_curves(fpr_list, tpr_list, labels=None, title="ROC Curves Comparison"):
-    fig = make_roc_curves_figure(fpr_list, tpr_list, labels=labels, title=title)
-    display(fig)
     return fig
 
 
@@ -469,12 +411,6 @@ def make_roc_curves_figure(fpr_list, tpr_list, labels=None, title="ROC Curves Co
     ax.grid(True, alpha=0.3)
     ax.set_xlim([0, 1])
     ax.set_ylim([0, 1])
-    return fig
-
-
-def plot_privacy_accounting(epsilons, steps, title="Privacy Budget Consumption"):
-    fig = make_privacy_accounting_figure(epsilons, steps, title=title)
-    display(fig)
     return fig
 
 

@@ -1,7 +1,6 @@
 from typing import Any, List
 
 import numpy as np
-from IPython.display import display
 from matplotlib import pyplot as plt
 from sklearn.metrics import roc_curve
 
@@ -25,14 +24,6 @@ def make_accuracy_epsilon_noise_comparison_figure(
     axs[2].set_title('Accuracy vs Epsilon')
     axs[2].set_xlabel('Epsilon')
     axs[2].set_ylabel('Accuracy')
-    return fig
-
-
-def plot_accuracy_epsilon_noise_comparison(accuracy_array, epsilon_array, noise_scale_array, title):
-    fig = make_accuracy_epsilon_noise_comparison_figure(
-        accuracy_array, epsilon_array, noise_scale_array, title
-    )
-    display(fig)
     return fig
 
 
@@ -62,20 +53,6 @@ def make_weights_visualization_figure(
     return fig
 
 
-def plot_weights_visualization(
-    models: List[Model],
-    noise_scale_array: np.ndarray[Any, np.dtype[np.float64]],
-    epsilon_array: np.ndarray[Any, np.dtype[np.float64]],
-    accuracy_array: np.ndarray[Any, np.dtype[np.float64]],
-    title: str,
-):
-    fig = make_weights_visualization_figure(
-        models, noise_scale_array, epsilon_array, accuracy_array, title
-    )
-    display(fig)
-    return fig
-
-
 def make_average_category_weights_figure(category_means, noise_scale_array, title):
     fig, ax = plt.subplots(1, 2, figsize=(15, 5))
     ax[0].plot(noise_scale_array, category_means)
@@ -86,12 +63,6 @@ def make_average_category_weights_figure(category_means, noise_scale_array, titl
     ax[1].set_title('Difference between category 1 and -1')
     ax[1].set_xlabel('Noise scale')
     ax[1].set_ylabel('Average weight difference')
-    return fig
-
-
-def plot_average_category_weights(category_means, noise_scale_array, title):
-    fig = make_average_category_weights_figure(category_means, noise_scale_array, title)
-    display(fig)
     return fig
 
 
@@ -116,14 +87,4 @@ def make_roc_multiple_noise_factors_figure(
     ax.legend()
     ax.grid(True)
     fig.tight_layout()
-    return fig
-
-
-def plot_ROC_multiple_noise_factors(
-    positive_samples_list, negative_samples_list, noise_factor_vec, title
-):
-    fig = make_roc_multiple_noise_factors_figure(
-        positive_samples_list, negative_samples_list, noise_factor_vec, title
-    )
-    display(fig)
     return fig

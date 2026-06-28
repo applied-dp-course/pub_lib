@@ -71,14 +71,6 @@ def make_outputs_histograms_figure(algorithm: Callable, db0, db1, repetitions_nu
     return fig
 
 
-def plot_outputs_histograms(algorithm: Callable, db0, db1, repetitions_number: int):
-    from IPython.display import display
-
-    fig = make_outputs_histograms_figure(algorithm, db0, db1, repetitions_number)
-    display(fig)
-    return fig
-
-
 def epsilon_from_roc_point(fpr: float, tpr: float, delta: float) -> float:
     """One-sided plug-in lower bound from a single ROC point."""
 

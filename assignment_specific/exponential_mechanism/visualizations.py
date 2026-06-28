@@ -146,17 +146,3 @@ class ExponentialMechanismInteractive(AbstractInteractivePlot):
             labels=self._labels,
         )
 
-
-def create_exponential_mechanism_interactive(
-    utilities: Sequence[float],
-    *,
-    sensitivity: float,
-    labels: Sequence[str] | None = None,
-):
-    """Backward-compatible launcher — prefer ``ExponentialMechanismInteractive(...).show()``."""
-
-    return ExponentialMechanismInteractive(
-        utilities,
-        sensitivity=sensitivity,
-        labels=labels,
-    ).show()

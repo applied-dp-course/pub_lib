@@ -3,10 +3,11 @@
 A per-module reference for the `libdpy` package: what each subpackage and file
 provides. For installation and a high-level overview see [README.md](README.md).
 
-`libdpy/__init__.py` exposes the package version (`__version__`). Subpackages have
-no `__init__.py` files — setuptools `find-packages` handles discovery. Course
-datasets ship inside the package under `resources/*.csv` (declared as
-`package-data` in `pyproject.toml`).
+`libdpy/__init__.py` exposes the package version (`__version__`). Subpackages use
+minimal `__init__.py` files where needed, and the package list is declared in
+`pyproject.toml` so the private development install and public `pub_lib` install
+ship the same library modules. Course datasets ship inside the package under
+`resources/*.csv` (declared as `package-data` in `pyproject.toml`).
 
 ## Top-level modules
 
@@ -20,7 +21,7 @@ datasets ship inside the package under `resources/*.csv` (declared as
 |------|----------|
 | `noise.py` | `laplace_noise`, noisy sum/median helpers (`Laplace_sum`, `Gaussian_sum`, …) |
 | `exponential_mechanism.py` | Generic exponential mechanism, `get_exact_median` |
-| `above_threshold.py` | Batch Above Threshold + `simulate_above_threshold` demo |
+| `above_threshold.py` | Batch Above Threshold + `make_above_threshold_simulation_figure` demo |
 | `above_threshold_online.py` | Stateful `AboveThresholdOnline` class |
 | `synthetic_data.py` | DP histograms, synthetic sampling, TV-distance comparison |
 
@@ -73,14 +74,11 @@ Authors and website content should use three paths:
 | Live interactives | `Plot(...).show()` | `InteractiveSpec` rendered with ipywidgets |
 | Site interactives | `Plot(...).embed(...)` | Registered constructors export to marimo WASM |
 
-Legacy `plot_*` helpers that call `plt.show()` remain for notebook compatibility but should
-delegate to a `make_*_figure` factory and return the figure (these side-effect wrappers are
-slated for removal after one course cycle). Site-exportable interactives are
-registered in `visualization/registry.py` (including `LaplaceComparison` and
-`ExponentialMechanismInteractive`). Website animation embeds use `visualization/animation_embed.py`;
-external browser apps use `visualization/external_app_embed.py`.
-Pre-render inventory violations fail CI via `visualization/plot_inventory.py`; post-render checks
-(doubled defer attributes, full-page WASM route coverage) run after `quarto render`.
+Legacy `plot_*` display wrappers are intentionally unsupported. Use `make_*_figure(...)`
+for static figures, `Plot(...).show()` in live notebooks, and `Plot(...).embed(...)` on
+the website. Pre-render inventory violations fail CI via
+`visualization/plot_inventory.py`; post-render checks (doubled defer attributes,
+full-page WASM route coverage) run after `quarto render`.
 
 | File | Provides |
 |------|----------|
@@ -90,7 +88,12 @@ Pre-render inventory violations fail CI via `visualization/plot_inventory.py`; p
 | `ml_plots.py` / `ml_visualization.py` | Weight images, prediction grids, confusion matrices |
 | `private_visualization.py` | Accuracy/ε/noise comparisons, multi-model weight grids |
 | `one_run_auditing.py` | ε lower/upper bound plots from auditing experiments |
-| `interactive_plot.py` | Reusable `InteractivePlot` widget framework |
+| `interactive.py` | Backend-neutral `InteractiveSpec`, controls, actions, `.show()`, `.figure()`, and `.embed()` contract |
+| `interactive_widgets.py` / `interactive_matplotlib.py` | Live notebook renderers for interactive specs |
+| `registry.py` | Site-exportable constructor registry used by the website WASM build |
+| `animation_embed.py` / `animation_display.py` | Helpers for embedding and displaying generated animation artifacts |
+| `external_app_embed.py` | Embed helper for documented browser-native external apps |
+| `plot_inventory.py` | Shared scanner enforcing plotting, generated-artifact, and WASM route policy |
 
 ## `assignment_specific/` — per-assignment scaffolding
 

@@ -12,10 +12,7 @@ from libdpy.assignment_specific.privacy_auditing.visualizations import (
 )
 from libdpy.visualization.interactive import InteractiveSpec
 from libdpy.visualization.privacy_plots import PrivacyPlot
-from libdpy.visualization.roc_plots import (
-    EmpiricalEpsilonFromDeltaVisualizer,
-    TheoryROCVisualizer,
-)
+from libdpy.visualization.roc_plots import empirical_roc_spec, theory_roc_spec
 from libdpy.visualization.statistical_plots import LaplaceComparison
 
 # Public names discovered by ``Ctor(...).embed()`` in website sources.
@@ -34,13 +31,22 @@ def embed_spec_builders() -> dict[str, Callable[[dict], InteractiveSpec]]:
 
     return {
         "PrivacyPlot": lambda kwargs: PrivacyPlot(**kwargs).spec(),
-        "TheoryROCVisualizer": (
-            lambda kwargs: TheoryROCVisualizer(**{"auto_display": False, **kwargs}).spec()
-        ),
-        "EmpiricalEpsilonFromDeltaVisualizer": (
-            lambda kwargs: EmpiricalEpsilonFromDeltaVisualizer(
-                **{"auto_display": False, **kwargs}
-            ).spec()
+        "TheoryROCVisualizer": lambda kwargs: theory_roc_spec(**kwargs),
+        "EmpiricalEpsilonFromDeltaVisualizer": lambda kwargs: empirical_roc_spec(
+            **{
+                "compute_epsilon": False,
+                "show_compute_epsilon_toggle": True,
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if key != "random_seed"
+                },
+                **(
+                    {"sample_seed": kwargs["random_seed"]}
+                    if "random_seed" in kwargs
+                    else {}
+                ),
+            }
         ),
         "NaiveSafeEpsilonHistogram": lambda kwargs: NaiveSafeEpsilonHistogram(**kwargs).spec(),
         "LaplaceComparison": lambda kwargs: LaplaceComparison(**kwargs).spec(),

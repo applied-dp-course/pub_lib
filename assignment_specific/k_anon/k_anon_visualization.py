@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-from IPython.display import display
 
 
 def make_anonymity_histogram_figure(df, title, column_to_drop, max_value=10):
@@ -15,10 +14,4 @@ def make_anonymity_histogram_figure(df, title, column_to_drop, max_value=10):
     ax.set_xlabel('Anonymity level')
     ax.set_ylabel('Number of equivalence classes')
     ax.set_title('Anonymity level Histogram in the ' + title + ' dataset')
-    return fig
-
-
-def plot_histogram(df, title, column_to_drop, max_value=10):
-    fig = make_anonymity_histogram_figure(df, title, column_to_drop, max_value=max_value)
-    display(fig)
     return fig

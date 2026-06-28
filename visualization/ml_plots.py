@@ -1,7 +1,6 @@
 """Machine learning visualization utilities."""
 
 import numpy as np
-from IPython.display import display
 from matplotlib import pyplot as plt
 
 
@@ -10,12 +9,6 @@ def make_weight_figure(predictor, title="", cmap='gray'):
     ax.imshow(predictor, cmap=cmap)
     fig.colorbar(ax.images[0], ax=ax)
     ax.set_title(f"Weight Visualization {title}")
-    return fig
-
-
-def plot_weight(predictor, title="", cmap='gray'):
-    fig = make_weight_figure(predictor, title=title, cmap=cmap)
-    display(fig)
     return fig
 
 
@@ -37,23 +30,6 @@ def make_predictions_figure(
     return fig
 
 
-# Used by lecture_8
-def plot_predictions(
-    X_test, y_test, predictions, indices=None, num_images=10, figsize=(10, 5), cmap='gray'
-):
-    fig = make_predictions_figure(
-        X_test,
-        y_test,
-        predictions,
-        indices=indices,
-        num_images=num_images,
-        figsize=figsize,
-        cmap=cmap,
-    )
-    display(fig)
-    return fig
-
-
 def make_grayscale_histogram_figure(predictor):
     fig, ax = plt.subplots()
     counts, bin_edges, _ = ax.hist(predictor.flatten(), bins=30, edgecolor='black')
@@ -63,18 +39,13 @@ def make_grayscale_histogram_figure(predictor):
     return fig, counts, bin_edges
 
 
-# Used by lecture_8
-def plot_grayscale_histogram(predictor):
-    fig, counts, bin_edges = make_grayscale_histogram_figure(predictor)
-    display(fig)
+def describe_grayscale_histogram(counts, bin_edges) -> None:
     for i in range(len(counts)):
         print(
             f"Bin {i + 1}: Range [{bin_edges[i]:.2f}, {bin_edges[i + 1]:.2f}] has {counts[i]:.0f} values."
         )
-    return fig
 
 
-# Used by lecture_8
 def categorize_weight(predictor, threshold=0.01, title="Weight Visualization"):
     new_image = predictor.copy()
 
@@ -93,11 +64,9 @@ def categorize_weight(predictor, threshold=0.01, title="Weight Visualization"):
         f"gray = {np.round(new_image[maybe_gray].mean(), 3)}, "
         f"white = {np.round(new_image[maybe_white].mean(), 3)}",
     )
-    display(fig)
-    return new_image
+    return new_image, fig
 
 
-# Used by lecture_8
 def naive_classifier(X, y, label_a=0, label_b=1):
     X_a = np.array(X[y == label_a]) / 255.0
     X_b = np.array(X[y == label_b]) / 255.0
@@ -134,15 +103,6 @@ def make_logistic_classification_figure(
     return fig
 
 
-# Used by lecture_8
-def plot_logistic_classification(data, labels, final_predictor, title="", xlabel=""):
-    fig = make_logistic_classification_figure(
-        data, labels, final_predictor, title=title, xlabel=xlabel
-    )
-    display(fig)
-    return fig
-
-
 def make_losses_per_epoch_figure(
     training_losses: list[np.float64], validation_losses: list[np.float64]
 ):
@@ -154,12 +114,4 @@ def make_losses_per_epoch_figure(
     ax.set_ylabel('Loss')
     ax.set_ylim(0, 0.8)
     ax.legend()
-    return fig
-
-
-def plot_losses_per_epoch_from_lists(
-    training_losses: list[np.float64], validation_losses: list[np.float64]
-):
-    fig = make_losses_per_epoch_figure(training_losses, validation_losses)
-    display(fig)
     return fig

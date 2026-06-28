@@ -92,7 +92,7 @@ def _zoom_roc_axes(
     ax.set_ylim(max(0.0, y_min - y_pad), min(1.0, y_max + y_pad))
 
 
-def plot_dp_roc_line(epsilon: float, delta: float) -> Figure:
+def make_dp_roc_line_figure(epsilon: float, delta: float) -> Figure:
     """DP line as ROC bound (``fig-recall-dp-roc-line``)."""
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_SQUARE, dpi=_DPI)
@@ -146,7 +146,7 @@ def _exact_roc_panel(
     ax_roc.legend(loc="lower right", fontsize=8)
 
 
-def plot_exact_eps(
+def make_exact_eps_figure(
     dist_neg: Distribution,
     dist_pos: Distribution,
     delta: float | Sequence[float],
@@ -194,7 +194,7 @@ def plot_exact_eps(
     return fig
 
 
-def plot_sampled_densities(samples_neg: np.ndarray, samples_pos: np.ndarray) -> Figure:
+def make_sampled_densities_figure(samples_neg: np.ndarray, samples_pos: np.ndarray) -> Figure:
     """Histograms of black-box output samples (``fig-two-logistic-sampled-densities``)."""
 
     fig, ax = plt.subplots(figsize=(7, 4), dpi=_DPI)
@@ -209,7 +209,7 @@ def plot_sampled_densities(samples_neg: np.ndarray, samples_pos: np.ndarray) -> 
     return fig
 
 
-def plot_empirical_roc(
+def make_empirical_roc_figure(
     samples_neg: np.ndarray,
     samples_pos: np.ndarray,
     *,
@@ -233,7 +233,7 @@ def plot_empirical_roc(
     return fig
 
 
-def plot_empirical_roc_selected_threshold(
+def make_empirical_roc_selected_threshold_figure(
     samples_neg: np.ndarray,
     samples_pos: np.ndarray,
     delta: float,
@@ -268,7 +268,7 @@ def plot_empirical_roc_selected_threshold(
     return fig, tau_star, (gov_fpr, gov_tpr), eps_plug
 
 
-def plot_roc_resampling(
+def make_roc_resampling_figure(
     sampler_neg: Callable[..., np.ndarray],
     sampler_pos: Callable[..., np.ndarray],
     n: int,
@@ -302,7 +302,7 @@ def plot_roc_resampling(
     return fig
 
 
-def plot_threshold_event(
+def make_threshold_event_figure(
     samples_neg: np.ndarray,
     samples_pos: np.ndarray,
     tau_star: float,
@@ -340,7 +340,7 @@ def plot_threshold_event(
     return fig
 
 
-def plot_audit_confusion_matrix(
+def make_audit_confusion_matrix_figure(
     audit: AuditResult,
 ) -> Figure:
     """Confusion matrix and plug-in ROC point (``fig-audit-confusion-matrix``).
@@ -378,7 +378,7 @@ def plot_audit_confusion_matrix(
     return fig
 
 
-def plot_repeated_audit_points(
+def make_repeated_audit_points_figure(
     runs: Sequence[AuditResult],
     reference: tuple[float, float, float] | None = None,
 ) -> Figure:
@@ -405,7 +405,7 @@ def plot_repeated_audit_points(
     return fig
 
 
-def plot_confidence_rectangle(audit: AuditResult) -> Figure:
+def make_confidence_rectangle_figure(audit: AuditResult) -> Figure:
     """Confidence rectangle geometry (``fig-confidence-rectangle``)."""
 
     if (
@@ -511,7 +511,7 @@ def plot_confidence_rectangle(audit: AuditResult) -> Figure:
     return fig
 
 
-def plot_epsilon_histogram_naive_safe(
+def make_epsilon_histogram_naive_safe_figure(
     plug: Sequence[float],
     safe: Sequence[float],
     reference: float,
@@ -540,7 +540,7 @@ def plot_epsilon_histogram_naive_safe(
     return fig
 
 
-def plot_auditing_summary_diagram() -> Figure:
+def make_auditing_summary_diagram_figure() -> Figure:
     """Workflow summary diagram (``fig-auditing-summary-diagram``)."""
 
     steps = [

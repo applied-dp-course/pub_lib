@@ -1,7 +1,6 @@
 from typing import Callable
 
 import numpy as np
-from IPython.display import display
 from matplotlib import pyplot as plt
 
 
@@ -56,26 +55,6 @@ def make_effect_of_new_student_figure(
     return fig
 
 
-def plot_effect_of_new_student(
-    students_heights: list,
-    new_student_height: float,
-    dp_function: Callable,
-    epsilon: float,
-    experiments_number: int,
-    compute_exact_height_of_shortest: Callable,
-):
-    fig = make_effect_of_new_student_figure(
-        students_heights,
-        new_student_height,
-        dp_function,
-        epsilon,
-        experiments_number,
-        compute_exact_height_of_shortest,
-    )
-    display(fig)
-    return fig
-
-
 def make_results_figure(Binary_search_estimate, Naive_Noise_addition_estimate, ReportNoisyMax_median, X):
     fig, axs = plt.subplots(1, 3, figsize=(12, 6))
 
@@ -103,14 +82,6 @@ def make_results_figure(Binary_search_estimate, Naive_Noise_addition_estimate, R
     return fig
 
 
-def plot_results(Binary_search_estimate, Naive_Noise_addition_estimate, ReportNoisyMax_median, X):
-    fig = make_results_figure(
-        Binary_search_estimate, Naive_Noise_addition_estimate, ReportNoisyMax_median, X
-    )
-    display(fig)
-    return fig
-
-
 def make_exponential_noise_figure(values, epsilon, seed=None):
     rng = np.random.default_rng(seed)
     plt.style.use('default')
@@ -134,10 +105,4 @@ def make_exponential_noise_figure(values, epsilon, seed=None):
     ax.set_xticklabels(range(len(values)))
     ax.legend()
     fig.tight_layout()
-    return fig
-
-
-def create_plot(values, epsilon, seed=None):
-    fig = make_exponential_noise_figure(values, epsilon, seed=seed)
-    display(fig)
     return fig

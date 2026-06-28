@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libdpy"
-version = "0.2.6"
+version = "0.2.7"
 description = "A comprehensive library for Differential Privacy and Privacy-Preserving Machine Learning"
 readme = "README.md"
 requires-python = ">=3.10.11"
@@ -30,12 +30,14 @@ dependencies = [
     "scikit-learn>=1.0.0",
     "anonypy>=0.2.1",
     "tqdm>=4.60.0",
-    "ipywidgets>=7.6.0",
-    "anywidget>=0.9.18",
     "nbformat>=4.2.0",
 ]
 
 [project.optional-dependencies]
+notebook = [
+    "ipywidgets>=7.6.0",
+    "anywidget>=0.9.18",
+]
 ml = [
     "tensorflow>=2.20.0",
     "dp-accounting",

@@ -2,7 +2,6 @@
 
 import numpy as np
 import plotly.graph_objects as go
-from IPython.display import display
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm
 
@@ -28,13 +27,6 @@ def make_histogram_figure(data, title="", x_label="", show_kde=False, bins=50):
     ax.set_xlabel(x_label)
     ax.set_ylabel("Density")
     ax.legend()
-    return fig
-
-
-# Used by notebook0
-def plot_histogram(data, title="", x_label="", show_kde=False, bins=50):
-    fig = make_histogram_figure(data, title=title, x_label=x_label, show_kde=show_kde, bins=bins)
-    display(fig)
     return fig
 
 
@@ -148,13 +140,6 @@ def clt_plot_spec(
     )
 
 
-# Used by notebook 0
-def plot_CLT_with_sample_slider(normalization_func):
-    from .interactive import SpecInteractivePlot
-
-    return SpecInteractivePlot(clt_plot_spec(normalization_func)).show()
-
-
 def make_normal_distribution_comparison_figure(
     data, theoretical_mean=0, theoretical_std=1, title="Distribution Comparison"
 ):
@@ -190,19 +175,6 @@ def make_normal_distribution_comparison_figure(
     ax.set_ylabel('Density')
     ax.legend()
     ax.grid(True, alpha=0.3)
-    return fig
-
-
-def plot_normal_distribution_comparison(
-    data, theoretical_mean=0, theoretical_std=1, title="Distribution Comparison"
-):
-    fig = make_normal_distribution_comparison_figure(
-        data,
-        theoretical_mean=theoretical_mean,
-        theoretical_std=theoretical_std,
-        title=title,
-    )
-    display(fig)
     return fig
 
 
@@ -243,19 +215,6 @@ def make_convergence_to_normal_figure(
 
     fig.tight_layout()
     fig.suptitle('Central Limit Theorem: Convergence to Normal Distribution', y=1.02)
-    return fig
-
-
-def plot_convergence_to_normal(
-    sample_sizes, lower_bound=-3, upper_bound=8, normalization_func=None
-):
-    fig = make_convergence_to_normal_figure(
-        sample_sizes,
-        lower_bound=lower_bound,
-        upper_bound=upper_bound,
-        normalization_func=normalization_func,
-    )
-    display(fig)
     return fig
 
 
@@ -327,19 +286,6 @@ def make_sample_means_distribution_figure(
     return fig
 
 
-def plot_sample_means_distribution(
-    num_experiments=1000, sample_size=30, population_dist='uniform', seed=None
-):
-    fig = make_sample_means_distribution_figure(
-        num_experiments=num_experiments,
-        sample_size=sample_size,
-        population_dist=population_dist,
-        seed=seed,
-    )
-    display(fig)
-    return fig
-
-
 def make_laplace_distributions_figure(b, loc1, loc2):
     """Build a Matplotlib Laplace comparison figure without displaying it."""
 
@@ -361,12 +307,6 @@ def make_laplace_distributions_figure(b, loc1, loc2):
     ax.legend(loc='best')
     ax.grid(True, linestyle='--', alpha=0.5)
     fig.tight_layout()
-    return fig
-
-
-def plot_laplace_distributions(b, loc1, loc2):
-    fig = make_laplace_distributions_figure(b, loc1, loc2)
-    display(fig)
     return fig
 
 
@@ -443,9 +383,3 @@ class LaplaceComparison(AbstractInteractivePlot):
 
     def spec(self) -> InteractiveSpec:
         return laplace_comparison_spec(self.loc1, self.loc2)
-
-
-def create_laplace_interactive(loc1=55, loc2=56):
-    """Backward-compatible launcher — prefer ``LaplaceComparison(...).show()``."""
-
-    return LaplaceComparison(loc1=loc1, loc2=loc2).show()

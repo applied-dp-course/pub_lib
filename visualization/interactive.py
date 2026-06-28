@@ -220,7 +220,12 @@ class AbstractInteractivePlot(ABC):
     def show(self, **renderer_options):
         """Display and return the live notebook widget."""
 
-        from IPython.display import display
+        try:
+            from IPython.display import display
+        except ImportError as error:
+            raise RuntimeError(
+                "Plot.show() requires IPython/Jupyter. Use .figure() or .embed() instead."
+            ) from error
 
         rendered = self.widget(**renderer_options)
         display(rendered.root)
@@ -261,7 +266,7 @@ class SpecInteractivePlot(AbstractInteractivePlot):
 
 @dataclass(frozen=True)
 class InteractiveEmbed:
-    """HTML representation returned by ``InteractivePlot.embed()`` methods."""
+    """HTML representation returned by ``AbstractInteractivePlot.embed()`` methods."""
 
     html: str
 

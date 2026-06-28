@@ -18,7 +18,7 @@ from libdpy.attacks.reconstruction.geometry import (
 from libdpy.attacks.reconstruction.instances import (
     compare_ols_downside2_estimators,
 )
-from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
 from libdpy.visualization.interactive_widgets import render_ipywidgets
 
 try:
@@ -39,9 +39,8 @@ except ImportError:
 __all__ = [
     "HAS_PLOTLY",
     "HAS_WIDGETS",
-    "interactive_3d_slabs",
+    "Reconstruction3DSlabsPlot",
     "make_3d_out_of_cube_example_figure",
-    "plot_3d_out_of_cube_example",
 ]
 
 _CUBE_EDGES = [
@@ -749,29 +748,23 @@ def _slab_3d_widget_layout(figure, controls, _actions, errors):
     )
 
 
-def interactive_3d_slabs() -> Any:
-    """
-    Launch an interactive 3D slab explorer with per-query checkboxes.
+class Reconstruction3DSlabsPlot(AbstractInteractivePlot):
+    """Interactive 3D slab explorer with per-query checkboxes."""
 
-    All eight binary subset-count queries in ``{0,1}^3`` are available.
-    The cube is shown immediately; pick queries and ``true b`` to refine.
-    """
-    if not HAS_WIDGETS:
-        print("ipywidgets is not installed; 3D slab widget unavailable.")
-        return
-    if not HAS_PLOTLY:
-        print("plotly is not installed; 3D slab widget unavailable.")
-        return
+    def spec(self) -> InteractiveSpec:
+        return reconstruction_3d_slabs_spec()
 
-    from IPython.display import display
-
-    rendered = render_ipywidgets(
-        reconstruction_3d_slabs_spec(),
-        layout=_slab_3d_widget_layout,
-        preserve_ui_state=True,
-    )
-    display(rendered.root)
-    return rendered.root
+    def widget(self, **renderer_options):
+        if not HAS_WIDGETS:
+            raise RuntimeError("ipywidgets is not installed; 3D slab widget unavailable.")
+        if not HAS_PLOTLY:
+            raise RuntimeError("plotly is not installed; 3D slab widget unavailable.")
+        return render_ipywidgets(
+            self.build_spec(),
+            layout=_slab_3d_widget_layout,
+            preserve_ui_state=True,
+            **renderer_options,
+        )
 
 
 def _threshold_plane_trace(
@@ -1217,21 +1210,4 @@ def make_3d_out_of_cube_example_figure(
         row=1,
         col=2,
     )
-    return fig
-
-
-def plot_3d_out_of_cube_example(
-    alpha: float = 0.2,
-    *,
-    show_loss_level: bool = False,
-) -> go.Figure:
-    """Compatibility wrapper that displays the out-of-cube counterexample figure."""
-
-    from IPython.display import display
-
-    fig = make_3d_out_of_cube_example_figure(
-        alpha=alpha,
-        show_loss_level=show_loss_level,
-    )
-    display(fig)
     return fig

@@ -41,17 +41,16 @@ def desicion_rule_params(
     """
     from libdpy.visualization.roc_plots import ComparisonType
 
-    match param_type:
-        case ComparisonType.SAME_VAR:
-            threshold = threshold_from_FPR(dist0, param)
-            tpr = TPR_from_threshold(dist1, threshold)
-            return param, tpr, [threshold]
-        case ComparisonType.GENERAL:
-            fpr = FPR_from_threshold(dist0, param)
-            tpr = TPR_from_threshold(dist1, param)
-            return fpr, tpr, [param]
-        case _:
-            raise ValueError("This setting is not supported")
+    kind = getattr(param_type, "value", param_type)
+    if kind == ComparisonType.SAME_VAR.value:
+        threshold = threshold_from_FPR(dist0, param)
+        tpr = TPR_from_threshold(dist1, threshold)
+        return param, tpr, [threshold]
+    if kind == ComparisonType.GENERAL.value:
+        fpr = FPR_from_threshold(dist0, param)
+        tpr = TPR_from_threshold(dist1, param)
+        return fpr, tpr, [param]
+    raise ValueError("This setting is not supported")
 
 
 def decision_rule_params(

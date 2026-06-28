@@ -67,19 +67,6 @@ def make_estimations_figure(
     return fig
 
 
-def plot_estimations(
-    estimation_function, epsilon: float, experiments_number: int, seed=0, **kwargs
-):
-    """Plot distribution of median estimations."""
-    from IPython.display import display
-
-    fig = make_estimations_figure(
-        estimation_function, epsilon, experiments_number, seed=seed, **kwargs
-    )
-    display(fig)
-    return fig
-
-
 def generate_pairings(n):
     pairings = set()
 

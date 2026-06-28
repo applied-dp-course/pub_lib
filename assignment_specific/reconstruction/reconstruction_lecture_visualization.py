@@ -12,7 +12,7 @@ from matplotlib.patches import FancyArrowPatch
 from libdpy.attacks.reconstruction.instances import (
     corner_feasible,
 )
-from libdpy.visualization.interactive import ControlSpec, InteractiveSpec
+from libdpy.visualization.interactive import ControlSpec, InteractiveSpec, AbstractInteractivePlot
 from libdpy.visualization.interactive_matplotlib import render_matplotlib_ipywidgets
 
 try:
@@ -40,9 +40,9 @@ _BINARY_CORNERS: dict[str, list[float]] = {
 __all__ = [
     "HAS_WIDGETS",
     "draw_2d_slabs",
-    "interactive_2d_slab",
-    "plot_candidate_elimination_panels",
-    "plot_query_matrix_overview",
+    "Reconstruction2DSlabPlot",
+    "make_candidate_elimination_panels_figure",
+    "make_query_matrix_overview_figure",
 ]
 
 _PINNED_COLORS = {
@@ -54,20 +54,6 @@ _PINNED_COLORS = {
     "pinned-1": "#b2182b",
 }
 
-
-def _display_figure(fig: plt.Figure | None = None) -> plt.Figure:
-    """Display a figure in Jupyter without Agg ``plt.show()`` warnings."""
-    if fig is None:
-        fig = plt.gcf()
-    try:
-        get_ipython()  # type: ignore[name-defined]
-        from IPython.display import display
-
-        display(fig)
-    except NameError:
-        pass
-    plt.close(fig)
-    return fig
 
 
 def _exact_line_anchor_2d(
@@ -548,21 +534,21 @@ def _slab_2d_widget_layout(image, controls, errors):
     )
 
 
-def interactive_2d_slab() -> Any:
-    """Launch the 2D slab explorer through the shared image renderer."""
+class Reconstruction2DSlabPlot(AbstractInteractivePlot):
+    """Interactive 2D slab explorer for the reconstruction lecture."""
 
-    if not HAS_WIDGETS:
-        print("ipywidgets is not installed; 2D slab widget unavailable.")
-        return None
-    from IPython.display import display
+    def spec(self) -> InteractiveSpec:
+        return reconstruction_2d_slab_spec()
 
-    rendered = render_matplotlib_ipywidgets(
-        reconstruction_2d_slab_spec(),
-        layout=_slab_2d_widget_layout,
-        dpi=120,
-    )
-    display(rendered.root)
-    return rendered.root
+    def widget(self, **renderer_options):
+        if not HAS_WIDGETS:
+            raise RuntimeError("ipywidgets is not installed; 2D slab widget unavailable.")
+        return render_matplotlib_ipywidgets(
+            self.build_spec(),
+            layout=_slab_2d_widget_layout,
+            dpi=120,
+            **renderer_options,
+        )
 
 
 def make_query_matrix_overview_figure(
@@ -667,16 +653,6 @@ def make_query_matrix_overview_figure(
     return fig
 
 
-def plot_query_matrix_overview(
-    Q: np.ndarray,
-    b: np.ndarray,
-    r: np.ndarray,
-    exact: np.ndarray | None = None,
-) -> plt.Figure:
-    fig = make_query_matrix_overview_figure(Q, b, r, exact=exact)
-    return _display_figure(fig)
-
-
 def make_candidate_elimination_panels_figure(
     hamming_dist: np.ndarray,
     max_residual: np.ndarray,
@@ -747,25 +723,3 @@ def make_candidate_elimination_panels_figure(
     )
     fig.tight_layout()
     return fig
-
-
-def plot_candidate_elimination_panels(
-    hamming_dist: np.ndarray,
-    max_residual: np.ndarray,
-    feasible: np.ndarray,
-    alpha: float,
-    n: int,
-    *,
-    m: int | None = None,
-    true_index: int | None = None,
-) -> plt.Figure:
-    fig = make_candidate_elimination_panels_figure(
-        hamming_dist,
-        max_residual,
-        feasible,
-        alpha,
-        n,
-        m=m,
-        true_index=true_index,
-    )
-    return _display_figure(fig)

@@ -22,13 +22,6 @@ from .interactive import (
     declarative_plotly_from_spec,
 )
 
-try:
-    from IPython.display import display
-except ImportError:  # pragma: no cover - exercised in browser-side Pyodide exports.
-
-    def display(*_args, **_kwargs):
-        return None
-
 
 class ComparisonType(Enum):
     SAME_VAR = 'value threshold'
@@ -304,7 +297,7 @@ def roc_decision_spec(
     return spec, parameter_values
 
 
-def ROC_and_distributions_visualization(
+def make_roc_decision_declarative_figure(
     desicion_rule_params: Callable,
     dist0: Distribution,
     dist1: Distribution,
@@ -1431,7 +1424,6 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         show_compute_epsilon_toggle: bool = True,
         selectable_distribution: bool = True,
         random_seed: int | None = None,
-        auto_display: bool = True,
     ):
         if n_samples <= 0:
             raise ValueError("n_samples must be positive")
@@ -1450,29 +1442,38 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         self._seed_generator = np.random.default_rng(random_seed)
         self._initial_sample_seed = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
         self._privacy_state = {"sample_seed": self._initial_sample_seed}
-        self._rendered = self.widget()
+        self._rendered = None
 
-        # Preserve the useful public attributes from the original implementation.
-        # When the distribution is fixed there is no selector control to expose.
-        self.distribution_control = self._rendered.controls.get("distribution")
-        self.scale_slider = self._rendered.controls["scale"]
-        self.sample_count_slider = self._rendered.controls["n_samples"]
-        self.compute_epsilon_toggle = self._rendered.controls.get("compute_epsilon")
-        self.delta_slider = self._rendered.controls["delta"]
-        self.sample_button = self._rendered.actions["generate_samples"]
-        self.interactive_plot = self._rendered.root
+    def _ensure_rendered(self):
+        if self._rendered is None:
+            self._rendered = self._create_widget()
+        return self._rendered
 
-        if auto_display:
-            display(self._rendered.root)
+    @property
+    def distribution_control(self):
+        return self._ensure_rendered().controls.get("distribution")
 
-    def _generate_samples_action(self, state, _controls):
-        state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
-        self._privacy_state["sample_seed"] = state["sample_seed"]
-        return None
+    @property
+    def scale_slider(self):
+        return self._ensure_rendered().controls["scale"]
 
-    def widget(self, **renderer_options):
-        """Internal ipywidgets renderer for live notebook use; prefer ``.show()`` in new code."""
+    @property
+    def sample_count_slider(self):
+        return self._ensure_rendered().controls["n_samples"]
 
+    @property
+    def compute_epsilon_toggle(self):
+        return self._ensure_rendered().controls.get("compute_epsilon")
+
+    @property
+    def delta_slider(self):
+        return self._ensure_rendered().controls["delta"]
+
+    @property
+    def sample_button(self):
+        return self._ensure_rendered().actions["generate_samples"]
+
+    def _create_widget(self, **renderer_options):
         from .interactive_widgets import render_ipywidgets
 
         return render_ipywidgets(
@@ -1489,6 +1490,11 @@ class EmpROCVisualizer(AbstractInteractivePlot):
             **renderer_options,
         )
 
+    def widget(self, **renderer_options):
+        if renderer_options:
+            return self._create_widget(**renderer_options)
+        return self._ensure_rendered()
+
     def spec(self) -> InteractiveSpec:
         return empirical_roc_spec(
             self.n_samples,
@@ -1504,7 +1510,8 @@ class EmpROCVisualizer(AbstractInteractivePlot):
 
     @property
     def samples(self) -> tuple[np.ndarray, np.ndarray] | None:
-        sample_seed = self._rendered.state["sample_seed"]
+        rendered = self._ensure_rendered()
+        sample_seed = rendered.state["sample_seed"]
         if sample_seed is None:
             return None
         distribution = (
@@ -1526,7 +1533,7 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         n_samples: int | None = None,
         seed: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Generate samples directly; the old ``generate_samples(scale)`` still works."""
+        """Generate labeled empirical ROC samples without building the live widget."""
 
         resolved_seed = (
             int(self._seed_generator.integers(0, np.iinfo(np.int32).max)) if seed is None else seed
@@ -1539,13 +1546,19 @@ class EmpROCVisualizer(AbstractInteractivePlot):
         )
 
     def on_button_clicked(self, _button=None) -> None:
-        """Compatibility callback that triggers the generic resampling action."""
+        """Trigger the generic resampling action on the live widget."""
 
+        rendered = self._ensure_rendered()
         self._generate_samples_action(
-            self._rendered.state,
-            {name: control.value for name, control in self._rendered.controls.items()},
+            rendered.state,
+            {name: control.value for name, control in rendered.controls.items()},
         )
-        self._rendered.update()
+        rendered.update()
+
+    def _generate_samples_action(self, state, _controls):
+        state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
+        self._privacy_state["sample_seed"] = state["sample_seed"]
+        return None
 
     def plot_curves(
         self,
@@ -1564,20 +1577,17 @@ class EmpROCVisualizer(AbstractInteractivePlot):
             else compute_epsilon
         )
         resolved_delta = self.delta if delta is None else delta
+        sample_seed = self._privacy_state.get("sample_seed", self._initial_sample_seed)
+        if self._rendered is not None:
+            sample_seed = self._rendered.state.get("sample_seed", sample_seed)
         return _make_empirical_roc_interactive_figure(
             distribution or self.distribution,
             scale,
             n_samples or self.n_samples,
-            self._rendered.state["sample_seed"],
+            sample_seed,
             compute_epsilon=resolved_compute_epsilon,
             delta=resolved_delta,
         )
-
-    def show(self):
-        """Display the already-created widget without rebuilding its state."""
-
-        display(self._rendered.root)
-        return self._rendered.root
 
 
 _ROC_RATE_EPS = 1e-12
@@ -2412,7 +2422,6 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
         compute_epsilon: bool = False,
         show_compute_epsilon_toggle: bool = True,
         selectable_distribution: bool = True,
-        auto_display: bool = True,
     ):
         if scale <= 0:
             raise ValueError("scale must be positive")
@@ -2425,21 +2434,30 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
         self.compute_epsilon = bool(compute_epsilon or not show_compute_epsilon_toggle)
         self.show_compute_epsilon_toggle = bool(show_compute_epsilon_toggle)
         self.selectable_distribution = bool(selectable_distribution)
-        self._rendered = self.widget()
+        self._rendered = None
 
-        # When the distribution is fixed there is no selector control to expose.
-        self.distribution_control = self._rendered.controls.get("distribution")
-        self.scale_slider = self._rendered.controls["scale"]
-        self.compute_epsilon_toggle = self._rendered.controls.get("compute_epsilon")
-        self.delta_slider = self._rendered.controls["delta"]
-        self.interactive_plot = self._rendered.root
+    def _ensure_rendered(self):
+        if self._rendered is None:
+            self._rendered = self._create_widget()
+        return self._rendered
 
-        if auto_display:
-            display(self._rendered.root)
+    @property
+    def distribution_control(self):
+        return self._ensure_rendered().controls.get("distribution")
 
-    def widget(self, **renderer_options):
-        """Internal ipywidgets renderer for live notebook use; prefer ``.show()`` in new code."""
+    @property
+    def scale_slider(self):
+        return self._ensure_rendered().controls["scale"]
 
+    @property
+    def compute_epsilon_toggle(self):
+        return self._ensure_rendered().controls.get("compute_epsilon")
+
+    @property
+    def delta_slider(self):
+        return self._ensure_rendered().controls["delta"]
+
+    def _create_widget(self, **renderer_options):
         from .interactive_widgets import render_ipywidgets
 
         return render_ipywidgets(
@@ -2451,6 +2469,11 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
             ),
             **renderer_options,
         )
+
+    def widget(self, **renderer_options):
+        if renderer_options:
+            return self._create_widget(**renderer_options)
+        return self._ensure_rendered()
 
     def spec(self) -> InteractiveSpec:
         return theory_roc_spec(
@@ -2485,35 +2508,6 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
             delta=resolved_delta,
         )
 
-    def show(self):
-        """Display the already-created widget without rebuilding its state."""
-
-        display(self._rendered.root)
-        return self._rendered.root
-
-
-class EpsilonFromDeltaVisualizer(TheoryROCVisualizer):
-    """Backward-compatible alias for ``TheoryROCVisualizer`` with epsilon mode enabled."""
-
-    def __init__(
-        self,
-        distribution: str = "Laplace",
-        scale: float = 1.0,
-        delta: float = _DELTA_DEFAULT_THEORY,
-        *,
-        selectable_distribution: bool = True,
-        auto_display: bool = True,
-    ):
-        super().__init__(
-            distribution=distribution,
-            scale=scale,
-            delta=delta,
-            compute_epsilon=True,
-            show_compute_epsilon_toggle=False,
-            selectable_distribution=selectable_distribution,
-            auto_display=auto_display,
-        )
-
 
 class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
     """Empirical ROC explorer with the compute-ε toggle exposed (off by default)."""
@@ -2527,7 +2521,6 @@ class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
         *,
         selectable_distribution: bool = True,
         random_seed: int | None = None,
-        auto_display: bool = True,
     ):
         super().__init__(
             n_samples,
@@ -2538,5 +2531,4 @@ class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
             show_compute_epsilon_toggle=True,
             selectable_distribution=selectable_distribution,
             random_seed=random_seed,
-            auto_display=auto_display,
         )

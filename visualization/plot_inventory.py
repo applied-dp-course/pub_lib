@@ -55,6 +55,11 @@ INVENTORY_STRICT_CATEGORIES: frozenset[str] = frozenset(
         "legacy_generated_app",
         "plt_show",
         "figure_show",
+        "ipython_display_import",
+        "notebook_display_import",
+        "library_display_call",
+        "legacy_plot_wrapper",
+        "banned_legacy_api",
         "unregistered_embed",
         "marimo_controls",
         "orphan_generated_app",
@@ -76,6 +81,58 @@ _FIGURE_SHOW_RECEIVER_NAMES = frozenset({"fig", "figure"})
 
 # ``plot_*`` compatibility wrappers may call ``display(fig)`` but not ``fig.show()``.
 _FIGURE_SHOW_ALLOWLIST_FUNCTIONS: frozenset[str] = frozenset()
+
+# Top-level ``plot_*`` names allowed as pure figure factories (not display wrappers).
+_PLOT_FUNCTION_ALLOWLIST_FILES: frozenset[str] = frozenset()
+
+# Plotting-policy scans intentionally cover visualization + assignment_specific only.
+# Broader library modules (e.g. hypothesis_testing) are out of scope for banned-legacy checks.
+
+# Internal ax/drawing helpers that are not public display wrappers.
+_PLOT_FUNCTION_ALLOWLIST_NAMES: frozenset[str] = frozenset(
+    {
+        "plot_confusion_matrix",
+    }
+)
+
+# Notebook-only functions permitted to call ``display(...)``.
+_DISPLAY_CALL_ALLOWLIST_FUNCTIONS: frozenset[str] = frozenset({"show"})
+
+# Public names removed from the plotting API; must not reappear in library code.
+_BANNED_LEGACY_API_NAMES: frozenset[str] = frozenset(
+    {
+        "InteractivePlot",
+        "PlotSlider",
+        "PlotMethod",
+        "PlotMetaData",
+        "PlotAxisData",
+        "privacy_plot_ipywidgets",
+        "ROC_and_distributions_visualization",
+        "display_figure_animation",
+        "interactive_2d_slab",
+        "interactive_3d_slabs",
+        "create_exponential_mechanism_interactive",
+        "EpsilonFromDeltaVisualizer",
+        "notebook_display",
+    }
+)
+
+# Docstring phrases that indicate reintroduced compatibility shims.
+_BANNED_LEGACY_DOCSTRING_PHRASES: tuple[str, ...] = (
+    "legacy api",
+    "backward-compatible",
+    "backward compatible",
+    "compatibility path",
+    "compatibility wrapper",
+    "legacy interactive",
+    "legacy wrapper",
+    "legacy name",
+)
+
+_PLOT_WRAPPER_SCAN_ROOTS: tuple[str, ...] = (
+    "code_base_dev/libdpy/visualization",
+    "code_base_dev/libdpy/assignment_specific",
+)
 
 # Routes intentionally excluded from the full-page WASM smoke suite.
 FULL_PAGE_WASM_SMOKE_EXEMPT: dict[str, str] = {}
@@ -234,6 +291,214 @@ def find_plt_show_in_library(root: Path) -> list[PlotInventoryFinding]:
                     f"{_relative(path, root)}:{node.lineno}: library helper calls {receiver}.show()",
                 )
             )
+    return findings
+
+
+def find_ipython_display_imports(root: Path) -> list[PlotInventoryFinding]:
+    findings: list[PlotInventoryFinding] = []
+    lib_root = root / _LIBDPY_SCAN_ROOT
+    if not lib_root.is_dir():
+        return findings
+    for path in sorted(lib_root.rglob("*.py")):
+        if "__pycache__" in path.parts or "build" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module == "IPython.display":
+                if node.level != 0:
+                    continue
+                findings.append(
+                    PlotInventoryFinding(
+                        "ipython_display_import",
+                        f"{_relative(path, root)}:{node.lineno}: module-level "
+                        "import from IPython.display; use a local import inside .show()",
+                    )
+                )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "IPython.display" or alias.name.startswith("IPython."):
+                        findings.append(
+                            PlotInventoryFinding(
+                                "ipython_display_import",
+                                f"{_relative(path, root)}:{node.lineno}: module-level "
+                                f"import of {alias.name}; use a local import inside .show()",
+                            )
+                        )
+    return findings
+
+
+def find_notebook_display_imports(root: Path) -> list[PlotInventoryFinding]:
+    findings: list[PlotInventoryFinding] = []
+    lib_root = root / _LIBDPY_SCAN_ROOT
+    if not lib_root.is_dir():
+        return findings
+    for path in sorted(lib_root.rglob("*.py")):
+        if "__pycache__" in path.parts or "build" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and "notebook_display" in node.module:
+                findings.append(
+                    PlotInventoryFinding(
+                        "notebook_display_import",
+                        f"{_relative(path, root)}:{node.lineno}: imports removed "
+                        "notebook_display shim",
+                    )
+                )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "notebook_display" in alias.name:
+                        findings.append(
+                            PlotInventoryFinding(
+                                "notebook_display_import",
+                                f"{_relative(path, root)}:{node.lineno}: imports removed "
+                                "notebook_display shim",
+                            )
+                        )
+    return findings
+
+
+def find_library_display_calls(root: Path) -> list[PlotInventoryFinding]:
+    findings: list[PlotInventoryFinding] = []
+    lib_root = root / _LIBDPY_SCAN_ROOT
+    if not lib_root.is_dir():
+        return findings
+    for path in sorted(lib_root.rglob("*.py")):
+        if "__pycache__" in path.parts or "build" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        _attach_parents(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Name) and func.id == "display"):
+                continue
+            enclosing = _enclosing_function_name(node)
+            if enclosing in _DISPLAY_CALL_ALLOWLIST_FUNCTIONS:
+                continue
+            findings.append(
+                PlotInventoryFinding(
+                    "library_display_call",
+                    f"{_relative(path, root)}:{node.lineno}: display() outside "
+                    f"approved notebook-only entry point (in {enclosing or '<module>'})",
+                )
+            )
+    return findings
+
+
+def find_legacy_plot_wrappers(root: Path) -> list[PlotInventoryFinding]:
+    findings: list[PlotInventoryFinding] = []
+    for scan_root in _PLOT_WRAPPER_SCAN_ROOTS:
+        directory = root / scan_root
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*.py")):
+            if "__pycache__" in path.parts or "build" in path.parts:
+                continue
+            relative = _relative(path, root)
+            if relative in _PLOT_FUNCTION_ALLOWLIST_FILES:
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in tree.body:
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                if not node.name.startswith("plot_"):
+                    continue
+                if node.name in _PLOT_FUNCTION_ALLOWLIST_NAMES:
+                    continue
+                findings.append(
+                    PlotInventoryFinding(
+                        "legacy_plot_wrapper",
+                        f"{relative}:{node.lineno}: public plot_* entry point "
+                        f"{node.name}(); use make_*_figure or Plot(...).show()",
+                    )
+                )
+    return findings
+
+
+def find_banned_legacy_api(root: Path) -> list[PlotInventoryFinding]:
+    """Flag removed public API names and compatibility wording in library modules."""
+
+    findings: list[PlotInventoryFinding] = []
+    for scan_root in _PLOT_WRAPPER_SCAN_ROOTS:
+        directory = root / scan_root
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*.py")):
+            if "__pycache__" in path.parts or "build" in path.parts:
+                continue
+            relative = _relative(path, root)
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
+                    if node.name in _BANNED_LEGACY_API_NAMES:
+                        findings.append(
+                            PlotInventoryFinding(
+                                "banned_legacy_api",
+                                f"{relative}:{node.lineno}: banned legacy API name "
+                                f"{node.name!r} must not be reintroduced",
+                            )
+                        )
+                    docstring = ast.get_docstring(node)
+                    if docstring is not None:
+                        lowered = docstring.lower()
+                        for phrase in _BANNED_LEGACY_DOCSTRING_PHRASES:
+                            if phrase in lowered:
+                                findings.append(
+                                    PlotInventoryFinding(
+                                        "banned_legacy_api",
+                                        f"{relative}:{node.lineno}: docstring for "
+                                        f"{node.name!r} contains banned phrase {phrase!r}",
+                                    )
+                                )
+                                break
+
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.endswith("notebook_display") or alias.name == "notebook_display":
+                            findings.append(
+                                PlotInventoryFinding(
+                                    "banned_legacy_api",
+                                    f"{relative}:{node.lineno}: import of removed module "
+                                    f"{alias.name!r}",
+                                )
+                            )
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if module.endswith("notebook_display") or module == "notebook_display":
+                        findings.append(
+                            PlotInventoryFinding(
+                                "banned_legacy_api",
+                                f"{relative}:{node.lineno}: import from removed module "
+                                f"{module!r}",
+                            )
+                        )
+                    for alias in node.names:
+                        if alias.name in _BANNED_LEGACY_API_NAMES:
+                            findings.append(
+                                PlotInventoryFinding(
+                                    "banned_legacy_api",
+                                    f"{relative}:{node.lineno}: import of banned legacy name "
+                                    f"{alias.name!r}",
+                                )
+                            )
     return findings
 
 
@@ -562,6 +827,11 @@ def collect_plot_inventory_findings(
     findings.extend(find_raw_iframe_embeds(workspace))
     findings.extend(find_legacy_generated_app_bundles(workspace))
     findings.extend(find_plt_show_in_library(workspace))
+    findings.extend(find_ipython_display_imports(workspace))
+    findings.extend(find_notebook_display_imports(workspace))
+    findings.extend(find_library_display_calls(workspace))
+    findings.extend(find_legacy_plot_wrappers(workspace))
+    findings.extend(find_banned_legacy_api(workspace))
     findings.extend(find_unregistered_embed_constructors(workspace))
     findings.extend(find_unsupported_marimo_controls(workspace))
     findings.extend(find_orphan_generated_apps(workspace))

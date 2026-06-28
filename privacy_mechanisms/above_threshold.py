@@ -103,13 +103,3 @@ def make_above_threshold_simulation_figure(epsilon_list, p, T, num_trials, n, m,
 
     fig.tight_layout()
     return fig
-
-
-def simulate_above_threshold(epsilon_list, p, T, num_trials, n, m, seed=None):
-    from IPython.display import display
-
-    fig = make_above_threshold_simulation_figure(
-        epsilon_list, p, T, num_trials, n, m, seed=seed
-    )
-    display(fig)
-    return fig

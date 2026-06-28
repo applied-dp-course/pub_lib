@@ -5,10 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 import numpy as np
-from IPython.display import HTML, display
 from matplotlib.animation import ArtistAnimation
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+
+
+class _HTMLRepr:
+    """Minimal HTML wrapper for notebook display without importing IPython at module load."""
+
+    def __init__(self, data: str) -> None:
+        self.data = data
+
+    def _repr_html_(self) -> str:
+        return self.data
 
 
 def _rasterize_figure(figure: Figure) -> np.ndarray:
@@ -61,14 +70,33 @@ def figure_animation_html(
     return html
 
 
-def display_figure_animation(
-    frames: Iterable[Figure] | Iterator[Figure],
-    *,
-    fps: float = 24.0,
-    loop: bool = False,
-) -> HTML:
-    """Display a figure-sequence animation in a Jupyter notebook."""
+class FigureAnimation:
+    """Notebook-side animation player backed by a matplotlib figure sequence."""
 
-    payload = HTML(figure_animation_html(frames, fps=fps, loop=loop))
-    display(payload)
-    return payload
+    def __init__(
+        self,
+        frames: Iterable[Figure] | Iterator[Figure],
+        *,
+        fps: float = 24.0,
+        loop: bool = False,
+    ) -> None:
+        self._frames = frames
+        self._fps = fps
+        self._loop = loop
+
+    def html(self) -> _HTMLRepr:
+        return _HTMLRepr(
+            figure_animation_html(self._frames, fps=self._fps, loop=self._loop)
+        )
+
+    def show(self) -> _HTMLRepr:
+        try:
+            from IPython.display import display
+        except ImportError as error:
+            raise RuntimeError(
+                "FigureAnimation.show() requires IPython/Jupyter."
+            ) from error
+
+        payload = self.html()
+        display(payload)
+        return payload

@@ -6,7 +6,7 @@ from numpy._typing import _64Bit
 from libdpy.ml.data_types import LabeledData
 from libdpy.ml.models import Model
 from libdpy.ml.requires_tensorflow.early_stopping_utils import get_training_and_validation_loss
-from libdpy.visualization.ml_plots import plot_losses_per_epoch_from_lists
+from libdpy.visualization.ml_plots import make_losses_per_epoch_figure
 
 
 def get_losses(
@@ -23,8 +23,10 @@ def get_losses(
     return training_losses, validation_losses
 
 
-def plot_losses_per_epoch(model: Model, train_data: LabeledData, validation_data: LabeledData):
+def make_losses_per_epoch_figure_from_model(
+    model: Model, train_data: LabeledData, validation_data: LabeledData
+):
     training_losses, validation_losses = get_losses(
         model.__class__, model.weights_arr, train_data, validation_data
     )
-    plot_losses_per_epoch_from_lists(training_losses, validation_losses)
+    return make_losses_per_epoch_figure(training_losses, validation_losses)

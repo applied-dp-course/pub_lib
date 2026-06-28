@@ -1,7 +1,6 @@
 from typing import Dict
 
 import numpy as np
-from IPython.display import display
 from matplotlib import pyplot as plt
 from sklearn.metrics import auc, roc_curve
 
@@ -13,12 +12,6 @@ def make_weight_figure(predictor, title="", cmap='gray'):
     ax.imshow(predictor, cmap=cmap)
     fig.colorbar(ax.images[0], ax=ax)
     ax.set_title(f"Weight Visualization {title}")
-    return fig
-
-
-def plot_weight(predictor, title="", cmap='gray'):
-    fig = make_weight_figure(predictor, title=title, cmap=cmap)
-    display(fig)
     return fig
 
 
@@ -44,12 +37,6 @@ def make_confusion_matrixes_figure(confusion_matrix_train, confusion_matrix_test
     fig.suptitle('Confusion Matrixes')
     plot_confusion_matrix(confusion_matrix_train, ax[0], train_accuracy, classes, 'Train')
     plot_confusion_matrix(confusion_matrix_test, ax[1], test_accuracy, classes, 'Test')
-    return fig
-
-
-def plot_confusion_matrixes(confusion_matrix_train, confusion_matrix_test, classes):
-    fig = make_confusion_matrixes_figure(confusion_matrix_train, confusion_matrix_test, classes)
-    display(fig)
     return fig
 
 
@@ -133,16 +120,6 @@ def make_binned_classification_grid_figure(
     return fig
 
 
-def plot_binned_classification_grid(
-    data_by_class_and_bin, num_samples, probability_bins=[0, 0.5, 0.75, 0.9, 1], seed=None
-):
-    fig = make_binned_classification_grid_figure(
-        data_by_class_and_bin, num_samples, probability_bins=probability_bins, seed=seed
-    )
-    display(fig)
-    return fig
-
-
 def create_dual_histogram(v1, v2, num_bins):
     v_combined = np.concatenate([v1, v2])
     p05 = np.percentile(v_combined, 5)
@@ -196,12 +173,4 @@ def make_distributions_and_roc_figure(
     ax2.grid(True)
     fig.suptitle(title)
     fig.tight_layout()
-    return fig
-
-
-def plot_distributions_and_ROC(positive_samples, negative_samples, title, n_bins=None):
-    fig = make_distributions_and_roc_figure(
-        positive_samples, negative_samples, title, n_bins=n_bins
-    )
-    display(fig)
     return fig
