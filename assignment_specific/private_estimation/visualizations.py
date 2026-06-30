@@ -390,7 +390,7 @@ def histogram_density_line(
     return centers, density
 
 
-def plot_histogram_density_line(
+def add_histogram_density_line(
     ax,
     values: np.ndarray,
     bins: int | np.ndarray = 80,
@@ -402,7 +402,7 @@ def plot_histogram_density_line(
     smooth: bool = True,
     **plot_kwargs,
 ):
-    """Plot a histogram density as a smooth line through bin centers."""
+    """Add a histogram-density line through bin centers to an axis."""
 
     centers, density = histogram_density_line(values, bins, range=range, smooth=smooth)
     if centers.size == 0:
@@ -475,7 +475,7 @@ def audit_panels_comparison_figure(
     suffix = figure_mode_suffix(figure_mode)
     for row, (panel, label) in enumerate(zip(panels, labels)):
         ax_hist, ax_roc = axes[row]
-        plot_histogram_density_line(
+        add_histogram_density_line(
             ax_hist,
             panel.samples_neg,
             adaptive_histogram_bin_edges(panel.samples_neg),
@@ -483,7 +483,7 @@ def audit_panels_comparison_figure(
             color="C0",
             linewidth=2.0,
         )
-        plot_histogram_density_line(
+        add_histogram_density_line(
             ax_hist,
             panel.samples_pos,
             adaptive_histogram_bin_edges(panel.samples_pos),

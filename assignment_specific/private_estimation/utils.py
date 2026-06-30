@@ -1635,7 +1635,7 @@ def private_rank_quantile_public_grid(
     epsilon: float = DEFAULT_EPS_TOTAL,
     granularity: float = DEFAULT_EM_GRANULARITY,
 ) -> float:
-    """Backward-compatible alias for :func:`private_inverse_sensitivity_quantile`."""
+    """Alias for :func:`private_inverse_sensitivity_quantile`."""
 
     return private_inverse_sensitivity_quantile(
         x,
