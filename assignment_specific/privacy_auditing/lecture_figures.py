@@ -35,6 +35,9 @@ from libdpy.visualization.roc_plots import (
 _FIGSIZE_TWO_PANEL = (10.0, 4.0)
 _FIGSIZE_SQUARE = (5.0, 5.0)
 _DPI = 100
+_HIST_MIN_OBS_PER_BIN = 80
+_HIST_MIN_BINS = 25
+_HIST_MAX_BINS = 180
 
 
 def _format_eps(epsilon: float) -> str:
@@ -43,6 +46,53 @@ def _format_eps(epsilon: float) -> str:
     if epsilon <= 0:
         return "0"
     return f"{epsilon:.3g}"
+
+
+def _adaptive_line_histogram(
+    values: np.ndarray,
+    *,
+    min_bins: int = _HIST_MIN_BINS,
+    max_bins: int = _HIST_MAX_BINS,
+    min_observations_per_bin: int = _HIST_MIN_OBS_PER_BIN,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-distribution, variance-scaled histogram centers and density."""
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    data_min = float(np.min(finite))
+    data_max = float(np.max(finite))
+    if data_min == data_max:
+        pad = max(abs(data_min) * 0.01, 1.0)
+        data_min -= pad
+        data_max += pad
+    data_width = data_max - data_min
+    if finite.size < 2:
+        n_bins = min_bins
+    else:
+        std = float(np.std(finite, ddof=1))
+        q25, q75 = np.quantile(finite, [0.25, 0.75])
+        iqr = float(q75 - q25)
+        widths = [
+            width
+            for width in (
+                3.5 * std / np.cbrt(finite.size) if std > 0 else 0.0,
+                2.0 * iqr / np.cbrt(finite.size) if iqr > 0 else 0.0,
+            )
+            if width > 0
+        ]
+        variance_scaled_bins = (
+            int(np.ceil(data_width / max(widths))) if widths else min_bins
+        )
+        occupancy_cap = max(min_bins, int(finite.size // min_observations_per_bin))
+        n_bins = max(min_bins, min(max_bins, occupancy_cap, variance_scaled_bins))
+    density, edges = np.histogram(finite, bins=n_bins, density=True)
+    if density.size >= 5:
+        kernel = np.array([1.0, 2.0, 3.0, 2.0, 1.0], dtype=float)
+        density = np.convolve(density, kernel / kernel.sum(), mode="same")
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    return centers, density
 
 
 def _add_dp_line(ax, epsilon: float, delta: float, *, color: str = "C0", label: str | None = None):
@@ -237,8 +287,18 @@ def make_empirical_roc_selected_threshold_figure(
     samples_neg: np.ndarray,
     samples_pos: np.ndarray,
     delta: float,
+    *,
+    claimed_epsilon: float | None = None,
+    title: str | None = None,
+    output_xlabel: str = "output",
 ) -> tuple[Figure, float, tuple[float, float], float]:
-    """Seeded empirical ROC with governing point and ``tau_star``."""
+    """Auditing-lecture empirical audit: output densities and empirical ROC.
+
+    The left panel overlays the two output laws with the ROC-selected threshold
+    ``tau_star``. The right panel shows the finite-sample ROC, the governing
+    point, and either a claimed ``(epsilon, delta)`` bound or the plug-in bound
+    at ``eps_plug``.
+    """
 
     tau_star, (gov_fpr, gov_tpr), eps_plug = selected_threshold_from_empirical_roc(
         samples_neg, samples_pos, delta
@@ -246,24 +306,60 @@ def make_empirical_roc_selected_threshold_figure(
     fpr, tpr, _ = empirical_roc(samples_neg, samples_pos)
 
     fig, axes = plt.subplots(1, 2, figsize=_FIGSIZE_TWO_PANEL, dpi=_DPI)
-    bins = max(30, int(np.sqrt(len(samples_neg) + len(samples_pos))))
-    axes[0].hist(samples_neg, bins=bins, density=True, alpha=0.5, color="C0", label=r"$H_0$")
-    axes[0].hist(samples_pos, bins=bins, density=True, alpha=0.5, color="C1", label=r"$H_1$")
-    axes[0].axvline(tau_star, color="black", linewidth=2, label=rf"$\tau_\star={tau_star:.3g}$")
-    axes[0].set_xlabel("output")
+
+    neg_centers, neg_density = _adaptive_line_histogram(samples_neg)
+    pos_centers, pos_density = _adaptive_line_histogram(samples_pos)
+    axes[0].plot(neg_centers, neg_density, color="C0", linewidth=2, label=r"$H_0$")
+    axes[0].plot(pos_centers, pos_density, color="C1", linewidth=2, label=r"$H_1$")
+    axes[0].axvline(
+        tau_star,
+        color="black",
+        linewidth=2,
+        label=rf"$\tau_\star={tau_star:.3g}$",
+    )
+    axes[0].set_xlabel(output_xlabel)
     axes[0].set_ylabel("density")
     axes[0].legend(fontsize=8)
     axes[0].set_title("Selected threshold from empirical ROC")
 
-    _roc_axes(axes[1])
-    axes[1].plot(fpr, tpr, color="C2", linewidth=2, label="empirical ROC")
-    _add_dp_line(axes[1], eps_plug, delta, color="C0")
-    axes[1].scatter(gov_fpr, gov_tpr, s=90, facecolors="none", edgecolors="C0", linewidths=2)
-    axes[1].set_title(
-        rf"Compute $\varepsilon$: plug-in $\widehat{{\varepsilon}}={_format_eps(eps_plug)}$, "
-        rf"$\tau_\star={tau_star:.3g}$"
+    roc_ax = axes[1]
+    _roc_axes(roc_ax)
+    roc_ax.plot(fpr, tpr, color="C2", linewidth=2.5, label="empirical ROC")
+    if claimed_epsilon is not None:
+        _add_dp_line(
+            roc_ax,
+            claimed_epsilon,
+            delta,
+            color="C0",
+            label=rf"$\varepsilon={_format_eps(claimed_epsilon)}$ bound",
+        )
+        roc_ax.scatter(
+            [gov_fpr],
+            [gov_tpr],
+            s=90,
+            facecolors="none",
+            edgecolors="C0",
+            linewidths=2,
+            zorder=3,
+            label=rf"$\widehat{{\varepsilon}}={_format_eps(eps_plug)}$",
+        )
+    else:
+        _add_dp_line(roc_ax, eps_plug, delta, color="C0")
+        roc_ax.scatter(
+            gov_fpr,
+            gov_tpr,
+            s=90,
+            facecolors="none",
+            edgecolors="C0",
+            linewidths=2,
+        )
+    roc_ax.set_title(
+        rf"Compute $\varepsilon$: plug-in $\widehat{{\varepsilon}}="
+        f"{_format_eps(eps_plug)}$, $\\tau_\\star={tau_star:.3g}$"
     )
-    axes[1].legend(loc="lower right", fontsize=8)
+    roc_ax.legend(loc="lower right", fontsize=8)
+    if title is not None:
+        fig.suptitle(title)
     fig.tight_layout()
     return fig, tau_star, (gov_fpr, gov_tpr), eps_plug
 

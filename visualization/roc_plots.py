@@ -952,6 +952,103 @@ def make_theory_roc_figure(
     return _finalize_roc_canvas(figure, resolved_title, lower, upper)
 
 
+def make_theory_roc_loc_scale_figure(
+    distribution: str,
+    loc_negative: float,
+    scale_negative: float,
+    loc_positive: float,
+    scale_positive: float,
+    *,
+    delta: float | None = None,
+    bound_epsilon: float | None = None,
+    resolution: int = 1000,
+    figure_title: str | None = None,
+    show_governing_point: bool = True,
+) -> go.Figure:
+    """Build the theory ROC plot for two explicit analytic output laws.
+
+    This uses the same Plotly ROC canvas as ``TheoryROCVisualizer`` but allows
+    the two distributions to have different locations and scales.
+    """
+
+    if scale_negative <= 0 or scale_positive <= 0:
+        raise ValueError("scales must be positive")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if delta is not None and not _DELTA_MIN <= delta <= 1:
+        raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+    if bound_epsilon is not None and bound_epsilon < 0:
+        raise ValueError("bound_epsilon must be nonnegative")
+
+    display_name, distribution_type = _empirical_distribution(distribution)
+    if distribution_type is None:
+        raise ValueError(
+            f"{display_name} has no closed-form density; use make_empirical_roc_figure with samples"
+        )
+
+    dist_negative = _make_empirical_roc_dist(
+        distribution_type,
+        loc=float(loc_negative),
+        scale=float(scale_negative),
+    )
+    dist_positive = _make_empirical_roc_dist(
+        distribution_type,
+        loc=float(loc_positive),
+        scale=float(scale_positive),
+    )
+    tail_prob = _EMPIRICAL_ROC_TAIL_PROB
+    lower = float(min(dist_negative.ppf(tail_prob), dist_positive.ppf(tail_prob)))
+    upper = float(max(dist_negative.isf(tail_prob), dist_positive.isf(tail_prob)))
+    grid = np.linspace(lower, upper, resolution)
+    fpr, tpr = optimal_roc_curve(dist_negative, dist_positive, resolution=resolution)
+    lr_unbounded = _likelihood_ratio_unbounded(dist_negative, dist_positive)
+
+    figure = _new_roc_canvas()
+    _add_theory_pdf_layer(figure, dist_negative, dist_positive, grid)
+    _add_theory_roc_layer(
+        figure,
+        dist_negative,
+        dist_positive,
+        resolution=resolution,
+        fpr=fpr,
+        tpr=tpr,
+    )
+    if delta is not None:
+        if bound_epsilon is not None:
+            epsilon = float(bound_epsilon)
+        elif delta <= 0 and lr_unbounded:
+            epsilon = float("inf")
+        else:
+            epsilon = optimal_roc_epsilon_for_delta(
+                fpr,
+                tpr,
+                delta,
+                lr_unbounded=lr_unbounded,
+            )
+        if np.isfinite(epsilon):
+            _add_privacy_bound_layer(
+                figure,
+                epsilon,
+                delta,
+                resolution=resolution,
+                line_color=_EPSILON_FIGURE_BOUND_COLOR,
+                one_sided=True,
+            )
+        if show_governing_point:
+            _add_roc_governing_point_layer(figure, fpr, tpr, delta)
+    _add_random_classifier_layer(figure)
+
+    resolved_title = (
+        figure_title
+        if figure_title is not None
+        else (
+            f"{display_name}: negative loc={loc_negative:.3g}, scale={scale_negative:.3g}; "
+            f"positive loc={loc_positive:.3g}, scale={scale_positive:.3g}"
+        )
+    )
+    return _finalize_roc_canvas(figure, resolved_title, lower, upper)
+
+
 def make_empirical_roc_figure(
     distribution: str,
     scale: float,
