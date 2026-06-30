@@ -767,7 +767,7 @@ def make_audit_empirical_quantile_clipping_figure(
     def mechanism(x, rng, epsilon=EPS_TOTAL, low_q=0.01, high_q=0.99):
         return empirical_quantile_clipped_mean(x, epsilon, low_q, high_q, rng)
 
-    panel = verify_witness_separates(
+    panel = audit_panel(
         mechanism,
         artifact.D,
         artifact.D_prime,
@@ -902,7 +902,7 @@ def make_audit_empirical_mu_sigma_clipping_figure(
     def mechanism(x, rng, epsilon=EPS_TOTAL, k=k):
         return empirical_mu_sigma_clipped_mean(x, epsilon, k, rng)
 
-    panel = verify_witness_separates(
+    panel = audit_panel(
         mechanism,
         artifact.D,
         artifact.D_prime,
