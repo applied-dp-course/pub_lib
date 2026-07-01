@@ -10,6 +10,7 @@ from statistics import NormalDist
 
 import plotly.graph_objects as go
 from .interactive import AbstractInteractivePlot, ControlSpec, InteractiveSpec
+from .plot_styles import PLOTLY_BOUND, plotly_dash
 
 _EPSILON_MAX = math.log(30)
 _DEFAULT_EPSILON = 0.0
@@ -93,7 +94,7 @@ def draw_ROCs_and_diag_from_distributions(
                 y=tpr,
                 mode="lines",
                 name=f"ROC {i+1}",
-                line=dict(color=color, width=2),
+                line=dict(color=color, width=2, dash=plotly_dash(i)),
             )
         )
 
@@ -107,7 +108,7 @@ def draw_ROCs_and_diag_from_distributions(
                 y=diagonal_y,
                 mode="lines",
                 name="Diagonal",
-                line=dict(color="gray", width=1, dash="dash"),
+                line=dict(color="gray", width=1, dash="dot"),
             )
         )
 
@@ -185,7 +186,7 @@ def make_privacy_bound_figure(
             y=y,
             mode="lines",
             name="Privacy bound",
-            line=dict(color="blue", width=4),
+            line=dict(color="blue", width=4, dash=PLOTLY_BOUND),
         )
     )
 
@@ -198,7 +199,11 @@ def make_privacy_bound_figure(
                 y=tpr,
                 mode="lines",
                 name=f"ROC {index + 1}",
-                line=dict(color=colors[index % len(colors)], width=2),
+                line=dict(
+                    color=colors[index % len(colors)],
+                    width=2,
+                    dash=plotly_dash(index),
+                ),
             )
         )
 

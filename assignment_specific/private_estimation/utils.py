@@ -177,6 +177,24 @@ def gaussian_noise_std(
     return float(hi)
 
 
+def clipped_noisy_mean(
+    x: np.ndarray,
+    L: float,
+    U: float,
+    epsilon: float,
+    rng: np.random.Generator,
+    *,
+    delta: float = DEFAULT_DELTA,
+) -> float:
+    """Clip to ``[L, U]``, calibrate Gaussian noise to sensitivity, return noisy mean."""
+
+    clipped = np.clip(x, L, U)
+    n = len(x)
+    sensitivity = (U - L) / n if U > L else 1.0 / n
+    std = gaussian_noise_std(sensitivity, epsilon, delta)
+    return float(np.mean(clipped) + rng.normal(0.0, std))
+
+
 class FigureMode(str, Enum):
     """Structured figure labels for proposal vs audit teaching modes."""
 
@@ -1237,10 +1255,7 @@ def empirical_quantile_clipped_mean(
 
     L = float(np.quantile(x, low_q))
     U = float(np.quantile(x, high_q))
-    clipped = np.clip(x, L, U)
-    sensitivity = (U - L) / len(x) if U > L else 1.0 / len(x)
-    std = gaussian_noise_std(sensitivity, epsilon)
-    return float(np.mean(clipped) + rng.normal(0.0, std))
+    return clipped_noisy_mean(x, L, U, epsilon, rng)
 
 
 def empirical_quantile_clipped_stat(
@@ -1319,14 +1334,20 @@ def median_value_plus_noise(
     *,
     target_lower: float = 0.0,
     target_upper: float = PUBLIC_TARGET_UPPER,
+    public_range: float | None = None,
+    delta: float = DEFAULT_DELTA,
 ) -> float:
     """Release median value + Gaussian noise calibrated to the public value range."""
 
     if epsilon <= 0:
         raise ValueError("epsilon must be positive")
-    if target_upper <= target_lower:
-        raise ValueError("target_upper must exceed target_lower")
-    std = gaussian_noise_std(target_upper - target_lower, epsilon)
+    if public_range is not None:
+        sensitivity = float(public_range)
+    else:
+        if target_upper <= target_lower:
+            raise ValueError("target_upper must exceed target_lower")
+        sensitivity = target_upper - target_lower
+    std = gaussian_noise_std(sensitivity, epsilon, delta)
     return float(np.median(x) + rng.normal(0.0, std))
 
 
@@ -1338,10 +1359,11 @@ def median_value_plus_noise_with_range(
     epsilon: float,
     delta: float = DEFAULT_DELTA,
 ) -> float:
-    """Release median with Gaussian noise calibrated to an explicit public range."""
+    """Backward-compatible alias for :func:`median_value_plus_noise`."""
 
-    std = gaussian_noise_std(public_range, epsilon, delta)
-    return float(np.median(x) + rng.normal(0.0, std))
+    return median_value_plus_noise(
+        x, epsilon, rng, public_range=public_range, delta=delta
+    )
 
 
 def empirical_mu_sigma_clipped_mean(
@@ -1355,10 +1377,7 @@ def empirical_mu_sigma_clipped_mean(
     mu = float(np.mean(x))
     sigma = float(np.std(x))
     L, U = mu - k * sigma, mu + k * sigma
-    clipped = np.clip(x, L, U)
-    sensitivity = (U - L) / len(x) if U > L else 1.0 / len(x)
-    std = gaussian_noise_std(sensitivity, epsilon)
-    return float(np.mean(clipped) + rng.normal(0.0, std))
+    return clipped_noisy_mean(x, L, U, epsilon, rng)
 
 
 def private_noisy_mu_sigma_step(
@@ -1451,10 +1470,8 @@ def private_mu_sigma_clipped_mean(
         step["round"] = round_id + 1
         trace.append(step)
         L, U = step["L"], step["U"]
-    clipped = np.clip(x, L, U)
+    estimate = clipped_noisy_mean(x, L, U, eps_mean, rng)
     mean_sensitivity = (U - L) / len(x)
-    mean_std = gaussian_noise_std(mean_sensitivity, eps_mean)
-    estimate = float(np.mean(clipped) + rng.normal(0.0, mean_std))
     return {
         "estimate": estimate,
         "L": L,
@@ -1683,11 +1700,8 @@ def private_quantile_clipped_mean(
     L = private_quantile(x, candidates, low_q, eps_low, rng)
     U = private_quantile(x, candidates, high_q, eps_high, rng)
     L, U = _enforce_clip_bounds(L, U)
-    clipped = np.clip(x, L, U)
-    n = len(x)
-    sensitivity = (U - L) / n
-    std = gaussian_noise_std(sensitivity, eps_mean)
-    estimate = float(np.mean(clipped) + rng.normal(0.0, std))
+    estimate = clipped_noisy_mean(x, L, U, eps_mean, rng)
+    sensitivity = (U - L) / len(x)
     return {
         "estimate": estimate,
         "L": L,
@@ -1695,40 +1709,6 @@ def private_quantile_clipped_mean(
         "epsilon": {"low_q": eps_low, "high_q": eps_high, "mean": eps_mean},
         "sensitivity": {"quantile": 1, "mean": sensitivity},
         "public_choices": ["candidate_grid", "MIN_CLIP_WIDTH"],
-    }
-
-
-def private_quantile_clipped_mean_public_grid(
-    x: np.ndarray,
-    rng: np.random.Generator,
-    *,
-    thresholds: np.ndarray | list = PUBLIC_INVERSE_SENSITIVITY_THRESHOLDS,
-    candidates: np.ndarray | list | None = None,
-    low_q: float = 0.01,
-    high_q: float = 0.99,
-    eps_low: float = 0.25,
-    eps_high: float = 0.25,
-    eps_mean: float = 0.50,
-    delta: float = DEFAULT_DELTA,
-) -> dict:
-    """Private quantile-clipped mean with inverse-sensitivity L/U selection."""
-
-    if candidates is not None:
-        thresholds = candidates
-    L = private_quantile(x, thresholds, low_q, eps_low, rng)
-    U = private_quantile(x, thresholds, high_q, eps_high, rng)
-    L, U = _enforce_clip_bounds(L, U)
-    clipped = np.clip(x, L, U)
-    mean_sensitivity = (U - L) / len(x)
-    noise_std = gaussian_noise_std(mean_sensitivity, eps_mean, delta)
-    estimate = float(np.mean(clipped) + rng.normal(0.0, noise_std))
-    return {
-        "estimate": estimate,
-        "L": L,
-        "U": U,
-        "epsilon": {"low_q": eps_low, "high_q": eps_high, "mean": eps_mean},
-        "sensitivity": {"quantile": 1, "mean": mean_sensitivity},
-        "public_choices": ["inverse_sensitivity_thresholds", "MIN_CLIP_WIDTH"],
     }
 
 
@@ -1893,11 +1873,8 @@ def gaussian_histogram_mean(
     # Clip to [mu - 3σ, mu + 3σ] using public width rule
     L, U = mu - 3 * sigma, mu + 3 * sigma
     L, U = _enforce_clip_bounds(L, U)
-    clipped = np.clip(x, L, U)
-    n = len(x)
-    mean_sensitivity = (U - L) / n
-    mean_std = gaussian_noise_std(mean_sensitivity, eps_mean, delta)
-    estimate = float(np.mean(clipped) + rng.normal(0.0, mean_std))
+    estimate = clipped_noisy_mean(x, L, U, eps_mean, rng, delta=delta)
+    mean_sensitivity = (U - L) / len(x)
     return {
         "estimate": estimate,
         "mu_hat": mu,

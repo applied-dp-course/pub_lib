@@ -12,7 +12,6 @@ from matplotlib.figure import Figure
 from libdpy.assignment_specific.privacy_auditing.lecture_figures import (
     _add_dp_line,
     _format_eps,
-    make_empirical_roc_selected_threshold_figure,
 )
 from libdpy.assignment_specific.private_estimation.utils import (
     AuditPanel,
@@ -422,30 +421,70 @@ def audit_panel_figure(
     *,
     title: str = "",
     figure_mode: FigureMode = FigureMode.EMPIRICAL_AUDIT,
+    claimed_epsilon: float | None = None,
 ) -> Figure:
     """Two-panel audit figure reusing the privacy-auditing ROC visual language."""
 
-    fig, _, _, _ = make_empirical_roc_selected_threshold_figure(
-        panel.samples_neg,
-        panel.samples_pos,
-        panel.audit_result.delta,
-    )
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.0), dpi=100)
+    ax_hist, ax_roc = axes
     suffix = figure_mode_suffix(figure_mode)
-    axes = fig.axes
-    axes[0].set_xlabel(panel.adversary_statistic)
+    add_histogram_density_line(
+        ax_hist,
+        panel.samples_neg,
+        adaptive_histogram_bin_edges(panel.samples_neg),
+        label="D",
+        color="C0",
+        linewidth=2.0,
+    )
+    add_histogram_density_line(
+        ax_hist,
+        panel.samples_pos,
+        adaptive_histogram_bin_edges(panel.samples_pos),
+        label="D'",
+        color="C1",
+        linewidth=2.0,
+    )
+    ax_hist.axvline(panel.tau_star, color="0.25", linestyle=":", linewidth=1.2)
+    ax_hist.set_xlabel(panel.adversary_statistic)
+    ax_hist.set_ylabel("density")
     base_title = title or f"Audit: {panel.adversary_statistic}"
-    axes[0].set_title(f"{base_title}{suffix}")
-    axes[1].set_title(
+    ax_hist.set_title(f"{base_title}{suffix}")
+    ax_hist.grid(axis="y", alpha=0.2)
+    ax_hist.legend(fontsize=8)
+
+    ax_roc.plot([0, 1], [0, 1], "k--", alpha=0.5, linewidth=1)
+    ax_roc.plot(panel.fpr, panel.tpr, color="C2", linewidth=2.0, label="empirical ROC")
+    ax_roc.scatter(
+        [panel.governing_fpr],
+        [panel.governing_tpr],
+        color="C3",
+        s=35,
+        zorder=3,
+        label=f"selected $\\widehat{{\\varepsilon}}={_format_eps(panel.eps_plug)}$",
+    )
+    bound_eps = claimed_epsilon if claimed_epsilon is not None else panel.eps_plug
+    _add_dp_line(
+        ax_roc,
+        bound_eps,
+        panel.audit_result.delta,
+        color="C3",
+        label=(
+            rf"$\varepsilon={_format_eps(bound_eps)}$ bound"
+            if claimed_epsilon is not None
+            else "_nolegend_"
+        ),
+    )
+    ax_roc.set_xlim(0, 1)
+    ax_roc.set_ylim(0, 1)
+    ax_roc.set_aspect("equal", adjustable="box")
+    ax_roc.set_xlabel("FPR")
+    ax_roc.set_ylabel("TPR")
+    ax_roc.set_title(
         f"Compute $\\varepsilon$: plug-in $\\widehat{{\\varepsilon}}="
         f"{_format_eps(panel.eps_plug)}${suffix}"
     )
-    _add_dp_line(
-        axes[1],
-        panel.eps_plug,
-        panel.audit_result.delta,
-        color="C3",
-        label="_nolegend_",
-    )
+    ax_roc.grid(alpha=0.2)
+    ax_roc.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     return fig
 

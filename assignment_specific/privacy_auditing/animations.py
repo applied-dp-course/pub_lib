@@ -17,6 +17,7 @@ from libdpy.assignment_specific.privacy_auditing.utils import (
     epsilon_from_roc_point,
     fixed_threshold_audit_state_sequence,
 )
+from libdpy.visualization.plot_styles import MPL_BOUND, MPL_REFERENCE
 from libdpy.visualization.roc_plots import one_sided_privacy_bound
 
 _FRAME_FIGSIZE = (13.0, 6.0)
@@ -115,7 +116,14 @@ def draw_confusion_matrix_grid(
 
 
 def _roc_axes(ax):
-    ax.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.4)
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        color="k",
+        linewidth=1,
+        alpha=0.4,
+        linestyle=MPL_REFERENCE,
+    )
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_xlabel("FPR")
@@ -140,6 +148,7 @@ def _add_dp_line(ax, epsilon: float, delta: float, *, color: str = "C0", label: 
         y,
         color=color,
         linewidth=2,
+        linestyle=MPL_BOUND,
         label=label or rf"plug-in $\widehat{{\varepsilon}}={_format_eps(epsilon)}$",
     )
 
@@ -320,8 +329,15 @@ def empirical_roc_accumulation_frames(
         axes[0].set_title(f"Accumulating samples ({count} per class)")
         axes[0].legend(loc="upper right", fontsize=8)
 
-        axes[1].plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.4)
-        axes[1].plot(fpr, tpr, color="C2", linewidth=2)
+        axes[1].plot(
+            [0, 1],
+            [0, 1],
+            color="k",
+            linewidth=1,
+            alpha=0.4,
+            linestyle=MPL_REFERENCE,
+        )
+        axes[1].plot(fpr, tpr, color="C2", linewidth=2, linestyle="-")
         axes[1].set_xlim(0, 1)
         axes[1].set_ylim(0, 1)
         axes[1].set_xlabel("FPR")

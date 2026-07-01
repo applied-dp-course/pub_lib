@@ -188,6 +188,24 @@ class InteractiveSpec:
         return self.make_figure(**self.figure_kwargs())
 
 
+class _DisplayedOnce:
+    """Wrap an object already passed to ``display()`` to suppress duplicate cell output."""
+
+    __slots__ = ("_wrapped",)
+
+    def __init__(self, wrapped: object) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_wrapped"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_wrapped"), name, value)
+
+    def _repr_mimebundle_(self, include: Any = (), exclude: Any = ()) -> dict[str, Any]:
+        return {}
+
+
 class AbstractInteractivePlot(ABC):
     """Base class for plot-specific wrappers backed by an ``InteractiveSpec``."""
 
@@ -218,7 +236,12 @@ class AbstractInteractivePlot(ABC):
         return figure
 
     def show(self, **renderer_options):
-        """Display and return the live notebook widget."""
+        """Display and return the live notebook widget.
+
+        The return value proxies the rendered widget for programmatic access but
+        suppresses a second Jupyter display when ``show()`` is the final cell
+        expression.
+        """
 
         try:
             from IPython.display import display
@@ -229,7 +252,7 @@ class AbstractInteractivePlot(ABC):
 
         rendered = self.widget(**renderer_options)
         display(rendered.root)
-        return rendered.root
+        return _DisplayedOnce(rendered.root)
 
     def embed(
         self,

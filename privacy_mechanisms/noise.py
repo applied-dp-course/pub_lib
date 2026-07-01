@@ -1,3 +1,11 @@
+"""Elementary noise samplers used in intro lectures (statistic + calibrated noise).
+
+The auditing and private-estimation lectures prefer :func:`clipped_noisy_mean` and
+:func:`gaussian_noise_std` in ``assignment_specific.private_estimation.utils`` for
+clip → calibrate → noise workflows. These helpers remain for the early ``Laplace_sum``
+teaching pattern in ``lecture_privacy_auditing``.
+"""
+
 from collections.abc import Callable
 
 import numpy as np

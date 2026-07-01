@@ -19,6 +19,7 @@ from libdpy.assignment_specific.privacy_auditing.utils import (
     run_repeated_gaussian_audits,
     true_epsilon_gaussian_threshold,
 )
+from libdpy.visualization.plot_styles import PLOTLY_BOUND
 
 
 def make_binomial_alpha_bounds_figure(
@@ -224,6 +225,7 @@ def make_naive_safe_epsilon_histogram_figure(
         x=true_eps,
         line_color="#d62728",
         line_width=2,
+        line_dash=PLOTLY_BOUND,
         annotation_text=f"true ε = {true_eps:.3g}",
         annotation_position="top right",
     )

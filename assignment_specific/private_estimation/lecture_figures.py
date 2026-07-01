@@ -11,6 +11,7 @@ import pandas as pd
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib.figure import Figure
 
+from libdpy.visualization.plot_styles import MPL_BOUND, MPL_PRIMARY, MPL_REFERENCE, MPL_SECONDARY
 from libdpy.assignment_specific.private_estimation.utils import (
     DEFAULT_DELTA,
     DEFAULT_EPS_TOTAL,
@@ -262,16 +263,19 @@ def make_accuracy_leaderboard_figure(
                     f"rank(sample, release)/{sample_denominator}"
                 ),
                 "0.25",
+                MPL_REFERENCE,
             ),
             (
                 "estimate_minus_sample",
                 f"rank(sample, release)/{sample_denominator} - 0.5",
                 "#2f6fbb",
+                MPL_SECONDARY,
             ),
             (
                 "estimate_minus_population",
                 f"rank(population, release)/{population_denominator} - 0.5",
                 "#c84e2d",
+                MPL_PRIMARY,
             ),
         ]
         x_label = "signed CDF error: rank / reference size − 0.5"
@@ -281,9 +285,24 @@ def make_accuracy_leaderboard_figure(
         empirical_label = f"empirical {estimate_target}"
         distribution_label = f"distribution {estimate_target}"
         line_specs = [
-            ("sample_minus_population", f"{empirical_label} - {distribution_label}", "0.25"),
-            ("estimate_minus_sample", f"released estimate - {empirical_label}", "#2f6fbb"),
-            ("estimate_minus_population", f"released estimate - {distribution_label}", "#c84e2d"),
+            (
+                "sample_minus_population",
+                f"{empirical_label} - {distribution_label}",
+                "0.25",
+                MPL_REFERENCE,
+            ),
+            (
+                "estimate_minus_sample",
+                f"released estimate - {empirical_label}",
+                "#2f6fbb",
+                MPL_SECONDARY,
+            ),
+            (
+                "estimate_minus_population",
+                f"released estimate - {distribution_label}",
+                "#c84e2d",
+                MPL_BOUND,
+            ),
         ]
         x_label = "signed error in dollars"
         plot_scale = 1.0
@@ -298,9 +317,9 @@ def make_accuracy_leaderboard_figure(
             dtype=float
         )
         plotted_series = [
-            (gray_vals, line_specs[0][1], line_specs[0][2], "sample_minus_population"),
-            (blue_vals, line_specs[1][1], line_specs[1][2], "estimate_minus_sample"),
-            (total_vals, line_specs[2][1], line_specs[2][2], "estimate_minus_population"),
+            (gray_vals, line_specs[0][1], line_specs[0][2], line_specs[0][3], "sample_minus_population"),
+            (blue_vals, line_specs[1][1], line_specs[1][2], line_specs[1][3], "estimate_minus_sample"),
+            (total_vals, line_specs[2][1], line_specs[2][2], line_specs[2][3], "estimate_minus_population"),
         ]
         finite = np.concatenate(
             [v[np.isfinite(v)] for v, *_ in plotted_series]
@@ -334,7 +353,7 @@ def make_accuracy_leaderboard_figure(
         hist_range = (float(display_low - pad), float(display_high + pad))
         if error_metric == "rank":
             hist_range = _RANK_SIGNED_ERROR_XLIM
-        for values, label, color, column in plotted_series:
+        for values, label, color, linestyle, column in plotted_series:
             finite_values = values[np.isfinite(values)]
             if error_metric == "rank":
                 visible_values = finite_values
@@ -356,6 +375,7 @@ def make_accuracy_leaderboard_figure(
                 label=f"{label} (std {line_std:{std_fmt}})",
                 color=color,
                 linewidth=2.0,
+                linestyle=linestyle,
                 alpha=0.65
                 if error_metric == "rank" and column == "sample_minus_population"
                 else 1.0,

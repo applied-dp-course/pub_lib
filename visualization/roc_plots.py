@@ -21,6 +21,13 @@ from .interactive import (
     InteractiveSpec,
     declarative_plotly_from_spec,
 )
+from .plot_styles import (
+    PLOTLY_BOUND,
+    PLOTLY_PRIMARY,
+    PLOTLY_REFERENCE,
+    PLOTLY_SECONDARY,
+    plotly_dash,
+)
 
 
 class ComparisonType(Enum):
@@ -129,7 +136,7 @@ def draw_two_distributions(dist0: Distribution, dist1: Distribution, fig, res: i
         y=dist0.pdf(x_range),
         name=f"{dist0.dist.name}({dist0.args[0] :.1f}, {dist0.args[1]:.1f})",
         mode='lines',
-        line=dict(width=2),
+        line=dict(width=2, dash=PLOTLY_PRIMARY),
         marker_color='red',
     )
     hist1 = go.Scatter(
@@ -137,7 +144,7 @@ def draw_two_distributions(dist0: Distribution, dist1: Distribution, fig, res: i
         y=dist1.pdf(x_range),
         name=f"{dist1.dist.name}({dist1.args[0] :.1f}, {dist1.args[1]:.1f})",
         mode='lines',
-        line=dict(width=2),
+        line=dict(width=2, dash=PLOTLY_SECONDARY),
         marker_color='blue',
     )
     fig.add_trace(hist0, row=1, col=1)
@@ -152,7 +159,7 @@ def draw_ROCs_and_diag_from_desicion_rule(
     column: int,
     res: int,
 ):
-    for dist_tuple in distributions:
+    for curve_index, dist_tuple in enumerate(distributions):
         dist0 = dist_tuple[0]
         dist1 = dist_tuple[1]
         if by_threshold:
@@ -163,10 +170,24 @@ def draw_ROCs_and_diag_from_desicion_rule(
             TPR = [desicion_rule_params(dist0, dist1, fpr, comparison_type)[1] for fpr in FPR]  # type: ignore
         dist_name = ' - ' + dist0.dist.name if len(distributions) > 1 else ""
         if column == 0:
-            fig.add_trace(go.Scatter(x=FPR, y=TPR, mode='lines', name='ROC Curve' + dist_name))
+            fig.add_trace(
+                go.Scatter(
+                    x=FPR,
+                    y=TPR,
+                    mode='lines',
+                    name='ROC Curve' + dist_name,
+                    line=dict(dash=plotly_dash(curve_index)),
+                )
+            )
         else:
             fig.add_trace(
-                go.Scatter(x=FPR, y=TPR, mode='lines', name='ROC Curve' + dist_name),
+                go.Scatter(
+                    x=FPR,
+                    y=TPR,
+                    mode='lines',
+                    name='ROC Curve' + dist_name,
+                    line=dict(dash=plotly_dash(curve_index)),
+                ),
                 row=1,
                 col=column,
             )
@@ -176,7 +197,7 @@ def draw_ROCs_and_diag_from_desicion_rule(
                 x=[0, 1],
                 y=[0, 1],
                 mode='lines',
-                line=dict(dash='dash', color='gray'),
+                line=dict(dash=PLOTLY_REFERENCE, color='gray'),
                 name='X=Y (Random Performance)',
             )
         )
@@ -186,7 +207,7 @@ def draw_ROCs_and_diag_from_desicion_rule(
                 x=[0, 1],
                 y=[0, 1],
                 mode='lines',
-                line=dict(dash='dash', color='gray'),
+                line=dict(dash=PLOTLY_REFERENCE, color='gray'),
                 name='X=Y (Random Performance)',
             ),
             row=1,
@@ -686,7 +707,7 @@ def _add_theory_pdf_layer(
             y=dist_negative.pdf(x),
             mode="lines",
             name="Negative PDF",
-            line={"color": "red"},
+            line={"color": "red", "dash": PLOTLY_PRIMARY},
             legend="legend",
         ),
         row=1,
@@ -698,7 +719,35 @@ def _add_theory_pdf_layer(
             y=dist_positive.pdf(x),
             mode="lines",
             name="Positive PDF",
-            line={"color": "blue"},
+            line={"color": "blue", "dash": PLOTLY_SECONDARY},
+            legend="legend",
+        ),
+        row=1,
+        col=1,
+    )
+
+
+def _add_selected_threshold_pdf_layer(
+    figure: go.Figure,
+    tau_star: float,
+) -> None:
+    """Mark the ROC-selected threshold on the output-density panel."""
+
+    if not math.isfinite(tau_star):
+        return
+    figure.add_vline(
+        x=tau_star,
+        line={"color": "black", "width": 2},
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="lines",
+            name=rf"τ★={tau_star:.3g}",
+            line={"color": "black", "width": 2, "dash": PLOTLY_BOUND},
             legend="legend",
         ),
         row=1,
@@ -731,7 +780,7 @@ def _add_theory_roc_layer(
             y=tpr,
             mode="lines",
             name=f"Theoretical ROC — AUC {auc(fpr, tpr):.3f}",
-            line={"color": line_color},
+            line={"color": line_color, "dash": PLOTLY_PRIMARY},
             legend="legend2",
         ),
         row=1,
@@ -816,7 +865,7 @@ def _add_sample_roc_layer(
     labels: np.ndarray,
     *,
     line_color: str = "green",
-    line_dash: str = "dash",
+    line_dash: str = PLOTLY_SECONDARY,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Add the empirical ROC curve (from sklearn ``roc_curve``) to the ROC panel."""
 
@@ -845,7 +894,7 @@ def _add_random_classifier_layer(figure: go.Figure) -> None:
             y=[0, 1],
             mode="lines",
             name="Random classifier",
-            line={"color": "black", "dash": "dash"},
+            line={"color": "black", "dash": PLOTLY_REFERENCE},
             legend="legend2",
         ),
         row=1,
@@ -952,7 +1001,7 @@ def make_theory_roc_figure(
     return _finalize_roc_canvas(figure, resolved_title, lower, upper)
 
 
-def make_theory_roc_loc_scale_figure(
+def _make_theory_roc_analytic_pair_figure(
     distribution: str,
     loc_negative: float,
     scale_negative: float,
@@ -965,18 +1014,14 @@ def make_theory_roc_loc_scale_figure(
     figure_title: str | None = None,
     show_governing_point: bool = True,
 ) -> go.Figure:
-    """Build the theory ROC plot for two explicit analytic output laws.
-
-    This uses the same Plotly ROC canvas as ``TheoryROCVisualizer`` but allows
-    the two distributions to have different locations and scales.
-    """
+    """Build the theory ROC plot for two explicit analytic output laws."""
 
     if scale_negative <= 0 or scale_positive <= 0:
         raise ValueError("scales must be positive")
     if resolution < 2:
         raise ValueError("resolution must be at least 2")
-    if delta is not None and not _DELTA_MIN <= delta <= 1:
-        raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+    if delta is not None and not 0 <= delta <= 1:
+        raise ValueError("delta must be between 0 and 1")
     if bound_epsilon is not None and bound_epsilon < 0:
         raise ValueError("bound_epsilon must be nonnegative")
 
@@ -1047,6 +1092,35 @@ def make_theory_roc_loc_scale_figure(
         )
     )
     return _finalize_roc_canvas(figure, resolved_title, lower, upper)
+
+
+def make_theory_roc_loc_scale_figure(
+    distribution: str,
+    loc_negative: float,
+    scale_negative: float,
+    loc_positive: float,
+    scale_positive: float,
+    *,
+    delta: float | None = None,
+    bound_epsilon: float | None = None,
+    resolution: int = 1000,
+    figure_title: str | None = None,
+    show_governing_point: bool = True,
+) -> go.Figure:
+    """Backward-compatible wrapper; prefer :class:`TheoryROCVisualizer` with explicit laws."""
+
+    return _make_theory_roc_analytic_pair_figure(
+        distribution,
+        loc_negative,
+        scale_negative,
+        loc_positive,
+        scale_positive,
+        delta=delta,
+        bound_epsilon=bound_epsilon,
+        resolution=resolution,
+        figure_title=figure_title,
+        show_governing_point=show_governing_point,
+    )
 
 
 def make_empirical_roc_figure(
@@ -1339,20 +1413,55 @@ def _make_theory_roc_interactive_figure(
     compute_epsilon: bool = False,
     delta: float = _DELTA_DEFAULT_THEORY,
     resolution: int = 1000,
+    loc_negative: float = 0.0,
+    loc_positive: float = 1.0,
+    scale_negative: float | None = None,
+    scale_positive: float | None = None,
+    bound_epsilon: float | None = None,
+    show_governing_point: bool = True,
+    figure_title: str | None = None,
 ) -> go.Figure:
+    resolved_scale_negative = scale if scale_negative is None else scale_negative
+    resolved_scale_positive = scale if scale_positive is None else scale_positive
+    use_custom_laws = (
+        loc_negative != 0.0
+        or loc_positive != 1.0
+        or scale_negative is not None
+        or scale_positive is not None
+        or bound_epsilon is not None
+        or not show_governing_point
+    )
+    show_privacy_layers = (
+        compute_epsilon
+        or bound_epsilon is not None
+        or (use_custom_laws and show_governing_point)
+    )
+    if use_custom_laws or bound_epsilon is not None:
+        return _make_theory_roc_analytic_pair_figure(
+            distribution,
+            loc_negative,
+            resolved_scale_negative,
+            loc_positive,
+            resolved_scale_positive,
+            delta=delta if show_privacy_layers else None,
+            bound_epsilon=bound_epsilon,
+            resolution=resolution,
+            figure_title=figure_title or "",
+            show_governing_point=show_governing_point,
+        )
     if compute_epsilon:
         return make_epsilon_from_delta_figure(
             distribution,
             scale,
             delta,
             resolution=resolution,
-            figure_title="",
+            figure_title=figure_title or "",
         )
     return make_theory_roc_figure(
         distribution,
         scale,
         resolution=resolution,
-        figure_title="",
+        figure_title=figure_title or "",
     )
 
 
@@ -1406,10 +1515,26 @@ def theory_roc_spec(
     compute_epsilon: bool = False,
     show_compute_epsilon_toggle: bool = True,
     selectable_distribution: bool = True,
+    loc_negative: float = 0.0,
+    loc_positive: float = 1.0,
+    scale_negative: float | None = None,
+    scale_positive: float | None = None,
+    bound_epsilon: float | None = None,
+    show_governing_point: bool = True,
 ) -> InteractiveSpec:
     """Backend-neutral spec for the theoretical ROC explorer (widget-free)."""
 
     distribution = _empirical_distribution(distribution)[0]
+    use_custom_laws = (
+        loc_negative != 0.0
+        or loc_positive != 1.0
+        or scale_negative is not None
+        or scale_positive is not None
+        or bound_epsilon is not None
+        or not show_governing_point
+    )
+    if use_custom_laws:
+        selectable_distribution = False
     controls = _theory_roc_interactive_controls(
         scale,
         distribution,
@@ -1418,11 +1543,28 @@ def theory_roc_spec(
         show_compute_epsilon_toggle=show_compute_epsilon_toggle,
         selectable_distribution=selectable_distribution,
     )
-    fixed_kwargs: dict[str, object] = {}
+    fixed_kwargs: dict[str, object] = {
+        "loc_negative": loc_negative,
+        "loc_positive": loc_positive,
+        "scale_negative": scale_negative,
+        "scale_positive": scale_positive,
+        "bound_epsilon": bound_epsilon,
+        "show_governing_point": show_governing_point,
+    }
     if not selectable_distribution:
         fixed_kwargs["distribution"] = distribution
     if not show_compute_epsilon_toggle:
         fixed_kwargs["compute_epsilon"] = True
+    make_figure = partial(
+        _make_theory_roc_interactive_figure,
+        resolution=1000,
+        loc_negative=loc_negative,
+        loc_positive=loc_positive,
+        scale_negative=scale_negative,
+        scale_positive=scale_positive,
+        bound_epsilon=bound_epsilon,
+        show_governing_point=show_governing_point,
+    )
     return InteractiveSpec(
         name="theory_roc_visualizer",
         artifact_name=_roc_artifact_name(
@@ -1432,12 +1574,16 @@ def theory_roc_spec(
             delta=delta,
             compute_toggle=show_compute_epsilon_toggle,
             selectable=selectable_distribution,
+            loc_negative=loc_negative,
+            loc_positive=loc_positive,
+            scale_negative=scale_negative,
+            scale_positive=scale_positive,
         ),
         controls=controls,
         preferred_backend="ipywidgets",
         allowed_backends=("ipywidgets", "wasm-marimo"),
         fixed_kwargs=fixed_kwargs,
-        make_figure=partial(_make_theory_roc_interactive_figure, resolution=1000),
+        make_figure=make_figure,
         figure_factory=("libdpy.visualization.roc_plots:_make_theory_roc_interactive_figure"),
         description="Theoretical ROC explorer for common distributions.",
     )
@@ -2257,6 +2403,7 @@ def _add_privacy_bound_layer(
     *,
     resolution: int,
     line_color: str = "blue",
+    line_dash: str = PLOTLY_BOUND,
     one_sided: bool = False,
 ) -> None:
     if one_sided:
@@ -2269,7 +2416,7 @@ def _add_privacy_bound_layer(
             y=bound_y,
             mode="lines",
             name="(ε, δ) bound",
-            line={"color": line_color, "width": 3},
+            line={"color": line_color, "width": 3, "dash": line_dash},
             legend="legend2",
         ),
         row=1,
@@ -2388,7 +2535,7 @@ def make_epsilon_from_delta_figure(
             y=tpr,
             mode="lines",
             name=f"Theoretical ROC — AUC {auc(fpr, tpr):.3f}",
-            line={"color": _EPSILON_FIGURE_ROC_COLOR},
+            line={"color": _EPSILON_FIGURE_ROC_COLOR, "dash": PLOTLY_PRIMARY},
             legend="legend2",
         ),
         row=1,
@@ -2467,7 +2614,7 @@ def make_empirical_epsilon_from_delta_figure(
             y=tpr,
             mode="lines",
             name=f"Empirical ROC — AUC {auc(fpr, tpr):.3f}",
-            line={"color": _EPSILON_FIGURE_ROC_COLOR, "dash": "solid"},
+            line={"color": _EPSILON_FIGURE_ROC_COLOR, "dash": PLOTLY_PRIMARY},
             legend="legend2",
         ),
         row=1,
@@ -2519,6 +2666,12 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
         compute_epsilon: bool = False,
         show_compute_epsilon_toggle: bool = True,
         selectable_distribution: bool = True,
+        loc_negative: float = 0.0,
+        loc_positive: float = 1.0,
+        scale_negative: float | None = None,
+        scale_positive: float | None = None,
+        bound_epsilon: float | None = None,
+        show_governing_point: bool = True,
     ):
         if scale <= 0:
             raise ValueError("scale must be positive")
@@ -2530,7 +2683,26 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
         self.delta = float(delta)
         self.compute_epsilon = bool(compute_epsilon or not show_compute_epsilon_toggle)
         self.show_compute_epsilon_toggle = bool(show_compute_epsilon_toggle)
-        self.selectable_distribution = bool(selectable_distribution)
+        self.loc_negative = float(loc_negative)
+        self.loc_positive = float(loc_positive)
+        self.scale_negative = None if scale_negative is None else float(scale_negative)
+        self.scale_positive = None if scale_positive is None else float(scale_positive)
+        self.bound_epsilon = None if bound_epsilon is None else float(bound_epsilon)
+        self.show_governing_point = bool(show_governing_point)
+        use_custom_laws = (
+            self.loc_negative != 0.0
+            or self.loc_positive != 1.0
+            or self.scale_negative is not None
+            or self.scale_positive is not None
+            or self.bound_epsilon is not None
+            or not self.show_governing_point
+        )
+        if self.bound_epsilon is not None:
+            self.compute_epsilon = True
+            self.show_compute_epsilon_toggle = False
+        self.selectable_distribution = (
+            bool(selectable_distribution) if not use_custom_laws else False
+        )
         self._rendered = None
 
     def _ensure_rendered(self):
@@ -2580,6 +2752,12 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
             compute_epsilon=self.compute_epsilon,
             show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
             selectable_distribution=self.selectable_distribution,
+            loc_negative=self.loc_negative,
+            loc_positive=self.loc_positive,
+            scale_negative=self.scale_negative,
+            scale_positive=self.scale_positive,
+            bound_epsilon=self.bound_epsilon,
+            show_governing_point=self.show_governing_point,
         )
 
     def plot_curves(
@@ -2603,7 +2781,187 @@ class TheoryROCVisualizer(AbstractInteractivePlot):
             scale,
             compute_epsilon=resolved_compute_epsilon,
             delta=resolved_delta,
+            loc_negative=self.loc_negative,
+            loc_positive=self.loc_positive,
+            scale_negative=self.scale_negative,
+            scale_positive=self.scale_positive,
+            bound_epsilon=self.bound_epsilon,
+            show_governing_point=self.show_governing_point,
         )
+
+
+def _make_empirical_epsilon_from_external_samples_figure(
+    samples_neg: np.ndarray,
+    samples_pos: np.ndarray,
+    delta: float,
+    *,
+    compute_epsilon: bool = False,
+    claimed_epsilon: float | None = None,
+    resolution: int = 1000,
+    histogram_bins: int | None = None,
+) -> go.Figure:
+    """Build an empirical ROC explorer from fixed audit sample arrays."""
+
+    samples_neg = np.asarray(samples_neg, dtype=float)
+    samples_pos = np.asarray(samples_pos, dtype=float)
+    if samples_neg.ndim != 1 or samples_pos.ndim != 1:
+        raise ValueError("samples_neg and samples_pos must be one-dimensional")
+    if not _DELTA_MIN <= delta <= 1:
+        raise ValueError(f"delta must be between {_DELTA_MIN} and 1")
+    if resolution < 2:
+        raise ValueError("resolution must be at least 2")
+    if claimed_epsilon is not None and claimed_epsilon < 0:
+        raise ValueError("claimed_epsilon must be nonnegative")
+
+    resolved_histogram_bins = (
+        max(5, int(math.ceil(math.sqrt(len(samples_neg) + len(samples_pos)))))
+        if histogram_bins is None
+        else histogram_bins
+    )
+    samples = np.concatenate([samples_neg, samples_pos])
+    labels = np.concatenate(
+        [np.zeros(len(samples_neg), dtype=int), np.ones(len(samples_pos), dtype=int)]
+    )
+    lower, upper = _samples_pdf_x_range(samples, labels)
+    figure = _new_roc_canvas()
+    _add_sample_pdf_layer(figure, samples, labels, lower, upper, resolved_histogram_bins)
+    scores = samples.copy()
+    fpr, tpr = _empirical_roc_points(labels, scores)
+    figure.add_trace(
+        go.Scatter(
+            x=fpr,
+            y=tpr,
+            mode="lines",
+            name=f"Empirical ROC — AUC {auc(fpr, tpr):.3f}",
+            line={"color": _EPSILON_FIGURE_ROC_COLOR, "dash": PLOTLY_PRIMARY},
+            legend="legend2",
+        ),
+        row=1,
+        col=2,
+    )
+    from libdpy.assignment_specific.privacy_auditing.utils import (
+        selected_threshold_from_empirical_roc,
+    )
+
+    tau_star, governing_point, epsilon = selected_threshold_from_empirical_roc(
+        samples_neg,
+        samples_pos,
+        delta,
+    )
+    if compute_epsilon:
+        log_slope = (
+            float(claimed_epsilon)
+            if claimed_epsilon is not None
+            else (epsilon if np.isfinite(epsilon) else float("inf"))
+        )
+        _add_selected_threshold_pdf_layer(figure, tau_star)
+        if np.isfinite(log_slope):
+            _add_privacy_bound_layer(
+                figure,
+                log_slope,
+                delta,
+                resolution=resolution,
+                line_color=_EPSILON_FIGURE_BOUND_COLOR,
+                one_sided=True,
+            )
+            _add_roc_governing_point_layer(
+                figure,
+                fpr,
+                tpr,
+                delta,
+                tau_star=tau_star,
+                point=governing_point,
+            )
+    _add_random_classifier_layer(figure)
+    return _finalize_roc_canvas(figure, "", lower, upper)
+
+
+def _make_empirical_roc_from_external_samples_spec_figure(
+    samples_neg: np.ndarray,
+    samples_pos: np.ndarray,
+    delta: float,
+    *,
+    compute_epsilon: bool = False,
+    claimed_epsilon: float | None = None,
+    resolution: int = 1000,
+    **kwargs: Any,
+) -> go.Figure:
+    """InteractiveSpec factory: empirical ROC from fixed audit sample arrays."""
+
+    del kwargs  # inert keys from the generic empirical-ROC state (e.g. sample_seed)
+    return _make_empirical_epsilon_from_external_samples_figure(
+        samples_neg,
+        samples_pos,
+        delta,
+        compute_epsilon=compute_epsilon,
+        claimed_epsilon=claimed_epsilon,
+        resolution=resolution,
+    )
+
+
+def empirical_roc_from_samples_spec(
+    samples_neg: np.ndarray,
+    samples_pos: np.ndarray,
+    delta: float = _DELTA_DEFAULT_EMPIRICAL,
+    *,
+    compute_epsilon: bool = False,
+    show_compute_epsilon_toggle: bool = True,
+    claimed_epsilon: float | None = None,
+) -> InteractiveSpec:
+    """Backend-neutral spec for an empirical audit with fixed output samples."""
+
+    samples_neg = np.asarray(samples_neg, dtype=float)
+    samples_pos = np.asarray(samples_pos, dtype=float)
+    controls: list[ControlSpec] = []
+    if show_compute_epsilon_toggle:
+        controls.append(_compute_epsilon_control_spec(default=compute_epsilon))
+    controls.append(_delta_control_spec(delta))
+    fixed_kwargs: dict[str, object] = {
+        "samples_neg": samples_neg,
+        "samples_pos": samples_pos,
+    }
+    if claimed_epsilon is not None:
+        fixed_kwargs["claimed_epsilon"] = float(claimed_epsilon)
+    if not show_compute_epsilon_toggle:
+        fixed_kwargs["compute_epsilon"] = True
+    return InteractiveSpec(
+        name="empirical_roc_from_samples",
+        artifact_name=_roc_artifact_name(
+            "empirical-audit",
+            n_neg=len(samples_neg),
+            n_pos=len(samples_pos),
+            delta=delta,
+        ),
+        controls=tuple(controls),
+        preferred_backend="ipywidgets",
+        allowed_backends=("ipywidgets", "plotly-declarative"),
+        fixed_kwargs=fixed_kwargs,
+        make_figure=_make_empirical_roc_from_external_samples_spec_figure,
+        figure_factory=(
+            "libdpy.visualization.roc_plots:"
+            "_make_empirical_roc_from_external_samples_spec_figure"
+        ),
+        description="Empirical ROC audit explorer from fixed mechanism output samples.",
+    )
+
+
+def _external_samples_roc_layout(*, show_compute_epsilon_toggle: bool):
+    from .interactive_widgets import roc_subplot_control_layout
+
+    def privacy_readout(controls: Mapping[str, Any]) -> str:
+        delta = float(controls["delta"].value)
+        return f"δ = {_format_delta_scientific(delta)}"
+
+    return roc_subplot_control_layout(
+        scale_readout=lambda controls: "",
+        privacy_readout=privacy_readout,
+        compute_epsilon_control="compute_epsilon" if show_compute_epsilon_toggle else None,
+        below_left=(),
+        below_right=("delta",),
+        centered_title="Empirical audit",
+        figure_width=_ROC_FIGURE_WIDTH,
+        slider_grid_template=roc_panel_slider_grid_template(),
+    )
 
 
 class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
@@ -2611,21 +2969,212 @@ class EmpiricalEpsilonFromDeltaVisualizer(EmpROCVisualizer):
 
     def __init__(
         self,
-        n_samples: int,
+        n_samples: int | None = None,
         distribution: str = "Laplace",
         scale: float = 1.0,
         delta: float = _DELTA_DEFAULT_EMPIRICAL,
         *,
         selectable_distribution: bool = True,
         random_seed: int | None = None,
+        samples_neg: np.ndarray | None = None,
+        samples_pos: np.ndarray | None = None,
+        sample_sampler: Callable[[np.random.Generator], tuple[np.ndarray, np.ndarray]]
+        | None = None,
+        claimed_epsilon: float | None = None,
+        compute_epsilon: bool = False,
+        show_compute_epsilon_toggle: bool = True,
     ):
+        if samples_neg is not None and samples_pos is not None:
+            resolved_n_samples = min(len(samples_neg), len(samples_pos))
+        elif n_samples is not None:
+            resolved_n_samples = int(n_samples)
+        else:
+            raise ValueError("provide n_samples or both samples_neg and samples_pos")
+        if sample_sampler is not None:
+            selectable_distribution = False
+        if samples_neg is not None or samples_pos is not None or sample_sampler is not None:
+            selectable_distribution = False
+
+        self.samples_neg = None if samples_neg is None else np.asarray(samples_neg, dtype=float)
+        self.samples_pos = None if samples_pos is None else np.asarray(samples_pos, dtype=float)
+        self.sample_sampler = sample_sampler
+        self.claimed_epsilon = None if claimed_epsilon is None else float(claimed_epsilon)
+        resolved_compute_epsilon = bool(compute_epsilon)
+        resolved_show_toggle = bool(show_compute_epsilon_toggle)
+        if self.claimed_epsilon is not None:
+            resolved_compute_epsilon = True
+            resolved_show_toggle = False
         super().__init__(
-            n_samples,
+            resolved_n_samples,
             distribution=distribution,
             scale=scale,
             delta=delta,
-            compute_epsilon=False,
-            show_compute_epsilon_toggle=True,
+            compute_epsilon=resolved_compute_epsilon,
+            show_compute_epsilon_toggle=resolved_show_toggle,
             selectable_distribution=selectable_distribution,
             random_seed=random_seed,
         )
+
+    def spec(self) -> InteractiveSpec:
+        if self.samples_neg is not None and self.samples_pos is not None:
+            return empirical_roc_from_samples_spec(
+                self.samples_neg,
+                self.samples_pos,
+                delta=self.delta,
+                compute_epsilon=self.compute_epsilon,
+                show_compute_epsilon_toggle=self.show_compute_epsilon_toggle,
+                claimed_epsilon=self.claimed_epsilon,
+            )
+        return super().spec()
+
+    def _create_widget(self, **renderer_options):
+        if self.samples_neg is not None and self.samples_pos is not None:
+            from .interactive_widgets import render_ipywidgets
+
+            return render_ipywidgets(
+                self.build_spec(),
+                layout=_external_samples_roc_layout(
+                    show_compute_epsilon_toggle=self.show_compute_epsilon_toggle
+                ),
+                **renderer_options,
+            )
+        return super()._create_widget(**renderer_options)
+
+    def _generate_samples_action(self, state, _controls):
+        if self.sample_sampler is not None:
+            rng = np.random.default_rng(int(self._seed_generator.integers(0, 2**32 - 1)))
+            neg, pos = self.sample_sampler(rng)
+            self.samples_neg = np.asarray(neg, dtype=float)
+            self.samples_pos = np.asarray(pos, dtype=float)
+            state["sample_seed"] = int(self._seed_generator.integers(0, np.iinfo(np.int32).max))
+            self._privacy_state["sample_seed"] = state["sample_seed"]
+            return None
+        return super()._generate_samples_action(state, _controls)
+
+    def plot_curves(
+        self,
+        scale: float,
+        distribution: str | None = None,
+        n_samples: int | None = None,
+        *,
+        compute_epsilon: bool | None = None,
+        delta: float | None = None,
+    ) -> go.Figure:
+        resolved_delta = self.delta if delta is None else delta
+        resolved_compute_epsilon = (
+            self.compute_epsilon if compute_epsilon is None else compute_epsilon
+        )
+        if self.samples_neg is not None and self.samples_pos is not None:
+            return _make_empirical_epsilon_from_external_samples_figure(
+                self.samples_neg,
+                self.samples_pos,
+                resolved_delta,
+                compute_epsilon=resolved_compute_epsilon,
+                claimed_epsilon=self.claimed_epsilon,
+            )
+        sample_seed = self._privacy_state.get("sample_seed", self._initial_sample_seed)
+        if self._rendered is not None:
+            sample_seed = self._rendered.state.get("sample_seed", sample_seed)
+        return _make_empirical_roc_interactive_figure(
+            distribution or self.distribution,
+            scale,
+            n_samples or self.n_samples,
+            sample_seed,
+            compute_epsilon=resolved_compute_epsilon,
+            delta=resolved_delta,
+        )
+
+
+def make_empirical_roc_selected_threshold_figure(
+    samples_neg: np.ndarray,
+    samples_pos: np.ndarray,
+    delta: float,
+    *,
+    claimed_epsilon: float | None = None,
+    title: str | None = None,
+    output_xlabel: str = "output",
+) -> tuple[Any, float, tuple[float, float], float]:
+    """Static matplotlib audit panel from fixed output samples.
+
+    Prefer :class:`EmpiricalEpsilonFromDeltaVisualizer` for interactive exploration.
+    """
+
+    import matplotlib.pyplot as plt
+
+    from libdpy.assignment_specific.privacy_auditing.lecture_figures import (
+        _DPI,
+        _FIGSIZE_TWO_PANEL,
+        _add_dp_line,
+        _adaptive_line_histogram,
+        _format_eps,
+        _roc_axes,
+    )
+    from libdpy.visualization.plot_styles import MPL_BOUND, MPL_PRIMARY, MPL_SECONDARY
+    from libdpy.assignment_specific.privacy_auditing.utils import (
+        empirical_roc,
+        selected_threshold_from_empirical_roc,
+    )
+
+    tau_star, (gov_fpr, gov_tpr), eps_plug = selected_threshold_from_empirical_roc(
+        samples_neg, samples_pos, delta
+    )
+    fpr, tpr, _ = empirical_roc(samples_neg, samples_pos)
+
+    fig, axes = plt.subplots(1, 2, figsize=_FIGSIZE_TWO_PANEL, dpi=_DPI)
+
+    neg_centers, neg_density = _adaptive_line_histogram(samples_neg)
+    pos_centers, pos_density = _adaptive_line_histogram(samples_pos)
+    axes[0].plot(neg_centers, neg_density, color="C0", linewidth=2, linestyle=MPL_PRIMARY, label=r"$H_0$")
+    axes[0].plot(pos_centers, pos_density, color="C1", linewidth=2, linestyle=MPL_SECONDARY, label=r"$H_1$")
+    axes[0].axvline(
+        tau_star,
+        color="black",
+        linewidth=2,
+        linestyle=MPL_BOUND,
+        label=rf"$\tau_\star={tau_star:.3g}$",
+    )
+    axes[0].set_xlabel(output_xlabel)
+    axes[0].set_ylabel("density")
+    axes[0].legend(fontsize=8)
+    axes[0].set_title("Selected threshold from empirical ROC")
+
+    roc_ax = axes[1]
+    _roc_axes(roc_ax)
+    roc_ax.plot(fpr, tpr, color="C2", linewidth=2.5, linestyle=MPL_PRIMARY, label="empirical ROC")
+    if claimed_epsilon is not None:
+        _add_dp_line(
+            roc_ax,
+            claimed_epsilon,
+            delta,
+            color="C0",
+            label=rf"$\varepsilon={_format_eps(claimed_epsilon)}$ bound",
+        )
+        roc_ax.scatter(
+            [gov_fpr],
+            [gov_tpr],
+            s=90,
+            facecolors="none",
+            edgecolors="C0",
+            linewidths=2,
+            zorder=3,
+            label=rf"$\widehat{{\varepsilon}}={_format_eps(eps_plug)}$",
+        )
+    else:
+        _add_dp_line(roc_ax, eps_plug, delta, color="C0")
+        roc_ax.scatter(
+            gov_fpr,
+            gov_tpr,
+            s=90,
+            facecolors="none",
+            edgecolors="C0",
+            linewidths=2,
+        )
+    roc_ax.set_title(
+        rf"Compute $\varepsilon$: plug-in $\widehat{{\varepsilon}}="
+        f"{_format_eps(eps_plug)}$, $\\tau_\\star={tau_star:.3g}$"
+    )
+    roc_ax.legend(loc="lower right", fontsize=8)
+    if title is not None:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig, tau_star, (gov_fpr, gov_tpr), eps_plug

@@ -26,6 +26,13 @@ from libdpy.assignment_specific.privacy_auditing.utils import (
     selected_threshold_from_empirical_roc,
 )
 from libdpy.privacy_mechanisms.noise import sample_outputs
+from libdpy.visualization.plot_styles import (
+    MPL_BOUND,
+    MPL_PRIMARY,
+    MPL_REFERENCE,
+    MPL_SECONDARY,
+    mpl_line_style,
+)
 from libdpy.visualization.roc_plots import (
     likelihood_ratio_unbounded,
     one_sided_privacy_bound,
@@ -95,11 +102,26 @@ def _adaptive_line_histogram(
     return centers, density
 
 
-def _add_dp_line(ax, epsilon: float, delta: float, *, color: str = "C0", label: str | None = None):
+def _add_dp_line(
+    ax,
+    epsilon: float,
+    delta: float,
+    *,
+    color: str = "C0",
+    label: str | None = None,
+    linestyle: str = MPL_BOUND,
+):
     if not math.isfinite(epsilon):
         return
     x, y = one_sided_privacy_bound(epsilon, delta, res=200)
-    ax.plot(x, y, color=color, linewidth=2, label=label or rf"$y=e^{{\varepsilon}}x+\delta$")
+    ax.plot(
+        x,
+        y,
+        color=color,
+        linewidth=2,
+        linestyle=linestyle,
+        label=label or rf"$y=e^{{\varepsilon}}x+\delta$",
+    )
 
 
 def _shade_forbidden_region(ax, epsilon: float, delta: float):
@@ -114,7 +136,15 @@ def _shade_forbidden_region(ax, epsilon: float, delta: float):
 
 def _roc_axes(ax, *, show_random_classifier_legend: bool = True):
     random_label = "random classifier" if show_random_classifier_legend else "_nolegend_"
-    ax.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.5, label=random_label)
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        color="k",
+        linewidth=1,
+        alpha=0.5,
+        label=random_label,
+        linestyle=MPL_REFERENCE,
+    )
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_xlabel("FPR")
@@ -171,8 +201,8 @@ def _exact_roc_panel(
         max(dist_neg.isf(0.001), dist_pos.isf(0.001)),
         resolution,
     )
-    ax_pdf.plot(grid, dist_neg.pdf(grid), color="C0", label=r"$H_0$: absent")
-    ax_pdf.plot(grid, dist_pos.pdf(grid), color="C1", label=r"$H_1$: present")
+    ax_pdf.plot(grid, dist_neg.pdf(grid), color="C0", linestyle=MPL_PRIMARY, label=r"$H_0$: absent")
+    ax_pdf.plot(grid, dist_pos.pdf(grid), color="C1", linestyle=MPL_SECONDARY, label=r"$H_1$: present")
     ax_pdf.set_xlabel("output")
     ax_pdf.set_ylabel("density")
     ax_pdf.legend(fontsize=8)
@@ -187,8 +217,8 @@ def _exact_roc_panel(
         epsilon, governing = one_sided_epsilon_from_roc_points(fpr, tpr, delta)
 
     _roc_axes(ax_roc)
-    ax_roc.plot(fpr, tpr, color="C2", linewidth=2, label="exact ROC")
-    _add_dp_line(ax_roc, epsilon, delta, color="C0")
+    ax_roc.plot(fpr, tpr, color="C2", linewidth=2, linestyle=MPL_PRIMARY, label="exact ROC")
+    _add_dp_line(ax_roc, epsilon, delta, color="C0", linestyle=MPL_BOUND)
     if governing is not None:
         ax_roc.scatter(*governing, s=80, facecolors="none", edgecolors="C0", linewidths=2, zorder=5)
     panel_title = title if subtitle is None else f"{title}\n{subtitle}"
@@ -276,7 +306,7 @@ def make_empirical_roc_figure(
             ax.plot(curve_fpr, curve_tpr, color="0.75", linewidth=1, alpha=0.7)
     color = "C2" if highlight else "C0"
     linewidth = 2.5 if highlight else 1.5
-    ax.plot(fpr, tpr, color=color, linewidth=linewidth, label="empirical ROC")
+    ax.plot(fpr, tpr, color=color, linewidth=linewidth, linestyle=MPL_PRIMARY, label="empirical ROC")
     ax.set_title("Empirical ROC from finite samples")
     ax.legend(loc="lower right")
     fig.tight_layout()
@@ -294,74 +324,21 @@ def make_empirical_roc_selected_threshold_figure(
 ) -> tuple[Figure, float, tuple[float, float], float]:
     """Auditing-lecture empirical audit: output densities and empirical ROC.
 
-    The left panel overlays the two output laws with the ROC-selected threshold
-    ``tau_star``. The right panel shows the finite-sample ROC, the governing
-    point, and either a claimed ``(epsilon, delta)`` bound or the plug-in bound
-    at ``eps_plug``.
+    Deprecated: implemented in ``libdpy.visualization.roc_plots``; this import path
+    remains for backward compatibility.
     """
-
-    tau_star, (gov_fpr, gov_tpr), eps_plug = selected_threshold_from_empirical_roc(
-        samples_neg, samples_pos, delta
+    from libdpy.visualization.roc_plots import (
+        make_empirical_roc_selected_threshold_figure as _make_figure,
     )
-    fpr, tpr, _ = empirical_roc(samples_neg, samples_pos)
 
-    fig, axes = plt.subplots(1, 2, figsize=_FIGSIZE_TWO_PANEL, dpi=_DPI)
-
-    neg_centers, neg_density = _adaptive_line_histogram(samples_neg)
-    pos_centers, pos_density = _adaptive_line_histogram(samples_pos)
-    axes[0].plot(neg_centers, neg_density, color="C0", linewidth=2, label=r"$H_0$")
-    axes[0].plot(pos_centers, pos_density, color="C1", linewidth=2, label=r"$H_1$")
-    axes[0].axvline(
-        tau_star,
-        color="black",
-        linewidth=2,
-        label=rf"$\tau_\star={tau_star:.3g}$",
+    return _make_figure(
+        samples_neg,
+        samples_pos,
+        delta,
+        claimed_epsilon=claimed_epsilon,
+        title=title,
+        output_xlabel=output_xlabel,
     )
-    axes[0].set_xlabel(output_xlabel)
-    axes[0].set_ylabel("density")
-    axes[0].legend(fontsize=8)
-    axes[0].set_title("Selected threshold from empirical ROC")
-
-    roc_ax = axes[1]
-    _roc_axes(roc_ax)
-    roc_ax.plot(fpr, tpr, color="C2", linewidth=2.5, label="empirical ROC")
-    if claimed_epsilon is not None:
-        _add_dp_line(
-            roc_ax,
-            claimed_epsilon,
-            delta,
-            color="C0",
-            label=rf"$\varepsilon={_format_eps(claimed_epsilon)}$ bound",
-        )
-        roc_ax.scatter(
-            [gov_fpr],
-            [gov_tpr],
-            s=90,
-            facecolors="none",
-            edgecolors="C0",
-            linewidths=2,
-            zorder=3,
-            label=rf"$\widehat{{\varepsilon}}={_format_eps(eps_plug)}$",
-        )
-    else:
-        _add_dp_line(roc_ax, eps_plug, delta, color="C0")
-        roc_ax.scatter(
-            gov_fpr,
-            gov_tpr,
-            s=90,
-            facecolors="none",
-            edgecolors="C0",
-            linewidths=2,
-        )
-    roc_ax.set_title(
-        rf"Compute $\varepsilon$: plug-in $\widehat{{\varepsilon}}="
-        f"{_format_eps(eps_plug)}$, $\\tau_\\star={tau_star:.3g}$"
-    )
-    roc_ax.legend(loc="lower right", fontsize=8)
-    if title is not None:
-        fig.suptitle(title)
-    fig.tight_layout()
-    return fig, tau_star, (gov_fpr, gov_tpr), eps_plug
 
 
 def make_roc_resampling_figure(
@@ -386,11 +363,11 @@ def make_roc_resampling_figure(
         color = "C2" if is_highlight else "0.75"
         linewidth = 2.5 if is_highlight else 1.0
         alpha = 1.0 if is_highlight else 0.7
-        ax.plot(fpr, tpr, color=color, linewidth=linewidth, alpha=alpha)
+        ax.plot(fpr, tpr, color=color, linewidth=linewidth, alpha=alpha, linestyle=mpl_line_style(0 if is_highlight else 1))
 
     if highlight_samples is not None:
         fpr, tpr, _ = empirical_roc(*highlight_samples)
-        ax.plot(fpr, tpr, color="C2", linewidth=2.5, label="lecture seed")
+        ax.plot(fpr, tpr, color="C2", linewidth=2.5, linestyle=MPL_PRIMARY, label="lecture seed")
 
     ax.set_title("Same mechanism, different samples: the empirical ROC moves")
     ax.legend(loc="lower right")
@@ -462,6 +439,7 @@ def make_audit_confusion_matrix_figure(
         audit.eps_plug,
         audit.delta,
         color="C0",
+        linestyle=MPL_BOUND,
         label=rf"plug-in $\widehat{{\varepsilon}}={_format_eps(audit.eps_plug)}$",
     )
     axes[1].set_title(
@@ -572,6 +550,7 @@ def make_confidence_rectangle_figure(audit: AuditResult) -> Figure:
         audit.eps_plug,
         audit.delta,
         color="C2",
+        linestyle=MPL_PRIMARY,
         label=rf"plug-in line ($\widehat{{\varepsilon}}={_format_eps(audit.eps_plug)}$)",
     )
     _add_dp_line(
@@ -579,6 +558,7 @@ def make_confidence_rectangle_figure(audit: AuditResult) -> Figure:
         audit.eps_audit,
         audit.delta,
         color="C0",
+        linestyle=MPL_SECONDARY,
         label=rf"safe line ($\varepsilon_{{\mathrm{{audit}}}}={_format_eps(audit.eps_audit)}$)",
     )
     _zoom_roc_axes(
@@ -626,6 +606,7 @@ def make_epsilon_histogram_naive_safe_figure(
         reference,
         color="C3",
         linewidth=2,
+        linestyle=MPL_BOUND,
         label="reference (large simulation; not available to auditor)",
     )
     ax.set_xlabel(r"$\varepsilon$")
