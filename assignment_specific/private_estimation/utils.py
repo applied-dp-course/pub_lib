@@ -1359,7 +1359,7 @@ def median_value_plus_noise_with_range(
     epsilon: float,
     delta: float = DEFAULT_DELTA,
 ) -> float:
-    """Backward-compatible alias for :func:`median_value_plus_noise`."""
+    """Alias for :func:`median_value_plus_noise`."""
 
     return median_value_plus_noise(
         x, epsilon, rng, public_range=public_range, delta=delta

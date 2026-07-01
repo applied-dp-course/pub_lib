@@ -421,7 +421,6 @@ def audit_panel_figure(
     *,
     title: str = "",
     figure_mode: FigureMode = FigureMode.EMPIRICAL_AUDIT,
-    claimed_epsilon: float | None = None,
 ) -> Figure:
     """Two-panel audit figure reusing the privacy-auditing ROC visual language."""
 
@@ -462,17 +461,11 @@ def audit_panel_figure(
         zorder=3,
         label=f"selected $\\widehat{{\\varepsilon}}={_format_eps(panel.eps_plug)}$",
     )
-    bound_eps = claimed_epsilon if claimed_epsilon is not None else panel.eps_plug
     _add_dp_line(
         ax_roc,
-        bound_eps,
+        panel.eps_plug,
         panel.audit_result.delta,
         color="C3",
-        label=(
-            rf"$\varepsilon={_format_eps(bound_eps)}$ bound"
-            if claimed_epsilon is not None
-            else "_nolegend_"
-        ),
     )
     ax_roc.set_xlim(0, 1)
     ax_roc.set_ylim(0, 1)
@@ -493,7 +486,6 @@ def audit_panels_comparison_figure(
     panels: list[AuditPanel],
     labels: list[str],
     *,
-    claimed_epsilon: float,
     title: str = "",
     figure_mode: FigureMode = FigureMode.EMPIRICAL_AUDIT,
 ) -> Figure:
@@ -549,10 +541,9 @@ def audit_panels_comparison_figure(
         )
         _add_dp_line(
             ax_roc,
-            claimed_epsilon,
+            panel.eps_plug,
             panel.audit_result.delta,
             color="C3",
-            label=f"$\\varepsilon={_format_eps(claimed_epsilon)}$ bound",
         )
         ax_roc.set_xlim(0, 1)
         ax_roc.set_ylim(0, 1)

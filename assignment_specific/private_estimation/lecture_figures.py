@@ -167,6 +167,10 @@ def make_accuracy_leaderboard_figure(
     estimate_target: str = "mean",
     error_metric: str = "value",
     title: str | None = None,
+    x_label: str | None = None,
+    std_fmt: str | None = None,
+    x_tick_fmt: str | None = None,
+    round_decimals: int | None = None,
 ) -> Figure:
     """Plot signed-error decompositions for one target/metric facet.
 
@@ -281,6 +285,7 @@ def make_accuracy_leaderboard_figure(
         x_label = "signed CDF error: rank / reference size − 0.5"
         plot_scale = 1.0
         std_fmt = ".3f"
+        hist_round_decimals = 3 if round_decimals is None else round_decimals
     else:
         empirical_label = f"empirical {estimate_target}"
         distribution_label = f"distribution {estimate_target}"
@@ -304,9 +309,11 @@ def make_accuracy_leaderboard_figure(
                 MPL_BOUND,
             ),
         ]
-        x_label = "signed error in dollars"
+        x_label = x_label or "signed error in dollars"
         plot_scale = 1.0
-        std_fmt = ",.0f"
+        std_fmt = std_fmt or ",.0f"
+        x_tick_fmt = x_tick_fmt or ",.0f"
+        hist_round_decimals = 0 if round_decimals is None else round_decimals
 
     for ax, method in zip(axes, methods):
         method_df = merged[merged["method"] == method]
@@ -367,7 +374,7 @@ def make_accuracy_leaderboard_figure(
             centers, density = accuracy_component_density_line(
                 visible_values,
                 hist_range,
-                round_decimals=3 if error_metric == "rank" else 0,
+                round_decimals=hist_round_decimals if error_metric == "value" else 3,
             )
             ax.plot(
                 centers,
@@ -392,7 +399,7 @@ def make_accuracy_leaderboard_figure(
         ax.set_title(f"{method} ({status})")
         ax.set_xlabel(x_label)
         if error_metric == "value":
-            ax.xaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
+            ax.xaxis.set_major_formatter(StrMethodFormatter(f"{{x:{x_tick_fmt}}}"))
         elif error_metric == "rank":
             ax.xaxis.set_major_formatter(StrMethodFormatter("{x:.2f}"))
         ax.set_ylabel("probability density")

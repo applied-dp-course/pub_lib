@@ -318,7 +318,6 @@ def make_empirical_roc_selected_threshold_figure(
     samples_pos: np.ndarray,
     delta: float,
     *,
-    claimed_epsilon: float | None = None,
     title: str | None = None,
     output_xlabel: str = "output",
 ) -> tuple[Figure, float, tuple[float, float], float]:
@@ -335,7 +334,6 @@ def make_empirical_roc_selected_threshold_figure(
         samples_neg,
         samples_pos,
         delta,
-        claimed_epsilon=claimed_epsilon,
         title=title,
         output_xlabel=output_xlabel,
     )

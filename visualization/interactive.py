@@ -508,6 +508,33 @@ def declarative_plotly_from_spec(
     return result
 
 
+def _python_literal(value: Any) -> str:
+    """Render a JSON-like value as a Python literal for generated marimo source."""
+
+    if value is True:
+        return "True"
+    if value is False:
+        return "False"
+    if value is None:
+        return "None"
+    if isinstance(value, str):
+        return repr(value)
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        parts = [
+            f"{repr(key)}: {_python_literal(item)}"
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        ]
+        return "{" + ", ".join(parts) + "}"
+    if isinstance(value, (list, tuple)):
+        inner = ", ".join(_python_literal(item) for item in value)
+        return f"[{inner}]"
+    return repr(value)
+
+
 def marimo_app_source(
     spec: InteractiveSpec,
     *,
@@ -610,7 +637,7 @@ def marimo_app_source(
         )
     figure_args = ", ".join(figure_arg_parts)
     figure_deps = ", ".join(widget_names)
-    fixed_kwargs = json.dumps(dict(spec.fixed_kwargs), sort_keys=True)
+    fixed_kwargs = _python_literal(dict(spec.fixed_kwargs))
     module_name, function_name = spec.figure_factory.split(":", maxsplit=1)
     pyodide_packages = json.dumps(["numpy", "scipy", "scikit-learn"])
 

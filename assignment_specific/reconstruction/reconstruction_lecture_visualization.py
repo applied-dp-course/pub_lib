@@ -455,8 +455,8 @@ def reconstruction_2d_slab_spec() -> InteractiveSpec:
                 readout_format=".2f",
             ),
         ),
-        preferred_backend="ipywidgets",
-        allowed_backends=("ipywidgets",),
+        preferred_backend="wasm-marimo",
+        allowed_backends=("ipywidgets", "wasm-marimo"),
         make_figure=make_2d_slab_figure,
         figure_factory=(
             "libdpy.assignment_specific.reconstruction."

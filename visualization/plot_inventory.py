@@ -10,13 +10,6 @@ from pathlib import Path
 from libdpy.visualization.interactive import InteractiveSpec, marimo_supported_control_kinds
 from libdpy.visualization.registry import EMBED_CONSTRUCTOR_NAMES, embed_spec_builders
 
-_GENERATED_BUNDLE_SKIP = frozenset(
-    {
-        "lecture-presentations/reconstruction-attacks/reconstruction-2d-slab",
-        "lecture-presentations/reconstruction-attacks/reconstruction-3d-slabs",
-    }
-)
-
 _EXTERNAL_APP_EMBED_MARKERS = (
     "external_app_iframe",
     "external_app_embed",
@@ -42,8 +35,11 @@ FULL_PAGE_WASM_SMOKE_ROUTES: tuple[str, ...] = (
     "pages/index.html",
     "content/blog-posts/hypothesis-testing/post.html",
     "content/blog-posts/privacy-auditing/post.html",
+    "content/blog-posts/private-estimation/post.html",
+    "content/blog-posts/reconstruction-attacks/post.html",
     "content/lecture-presentations/hypothesis-testing/presentation.html",
     "content/lecture-presentations/privacy-auditing/presentation.html",
+    "content/lecture-presentations/reconstruction-attacks/presentation.html",
     "content/site-posts/gaussian-privacy-tradeoff/index.html",
     "content/tools/privacy-tradeoff-explorer/index.html",
 )
@@ -135,7 +131,11 @@ _PLOT_WRAPPER_SCAN_ROOTS: tuple[str, ...] = (
 )
 
 # Routes intentionally excluded from the full-page WASM smoke suite.
-FULL_PAGE_WASM_SMOKE_EXEMPT: dict[str, str] = {}
+FULL_PAGE_WASM_SMOKE_EXEMPT: dict[str, str] = {
+    "content/lecture-presentations/private-estimation/presentation.html": (
+        "deck uses static make_*_figure factories; blog post carries WASM embeds"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -547,12 +547,16 @@ def _example_embed_kwargs(name: str) -> dict:
         return {"distribution": "Laplace", "scale": 1.0}
     if name == "EmpiricalEpsilonFromDeltaVisualizer":
         return {"n_samples": 100, "distribution": "Laplace", "scale": 1.0}
+    if name == "PrivateEstimationAuditROCVisualizer":
+        return {"scene": "ms-repair-one"}
     if name == "NaiveSafeEpsilonHistogram":
         return {}
     if name == "LaplaceComparison":
         return {"loc1": 55, "loc2": 56}
     if name == "ExponentialMechanismInteractive":
         return {"utilities": [1.0, 2.0, 3.0], "sensitivity": 1.0}
+    if name in {"Reconstruction2DSlabPlot", "Reconstruction3DSlabsPlot"}:
+        return {}
     raise KeyError(name)
 
 

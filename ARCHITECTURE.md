@@ -95,6 +95,23 @@ full-page WASM route coverage) run after `quarto render`.
 | `external_app_embed.py` | Embed helper for documented browser-native external apps |
 | `plot_inventory.py` | Shared scanner enforcing plotting, generated-artifact, and WASM route policy |
 
+### Site export (WASM) constraints
+
+A constructor listed in `registry.EMBED_CONSTRUCTOR_NAMES` is exported to a marimo WASM app by the
+website build. For that to succeed its `InteractiveSpec` must:
+
+- produce a **JSON-serializable** `fixed_kwargs` — convert numpy arrays with `.tolist()` and cast
+  numpy scalars to Python `float`/`int` (the generated marimo `app.py` embeds these as literals);
+- list `"wasm-marimo"` in `allowed_backends`;
+- give a **collision-free `artifact_name`** — when `(n_neg, n_pos, delta)` (or other size metadata)
+  alone could collide across scenes, fold in a sample fingerprint (e.g. a short sha256 of the
+  concatenated samples), as `empirical_roc_from_samples_spec` does.
+
+Because website `.embed()` calls take **only literal keyword arguments**, runtime data (e.g. audit
+sample arrays) must be regenerated inside a fixed-scene wrapper selected by a literal id — see
+`assignment_specific/private_estimation/embed_interactives.py` (`PrivateEstimationAuditROCVisualizer`)
+and `audit_embed_scenes.py`. The website-author view is in `website/authoring/AUTHORING.md`.
+
 ## `assignment_specific/` — per-assignment scaffolding
 
 Part of the package, fully implemented (no student stubs live here — those belong
