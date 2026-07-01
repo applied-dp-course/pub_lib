@@ -1242,13 +1242,17 @@ def _format_scale_readout(scale: float) -> str:
 
 
 def _scale_control_spec(scale: float) -> ControlSpec:
+    scale = float(scale)
+    min_scale = min(_EMPIRICAL_ROC_SCALE_MIN, scale)
+    if min_scale <= 0.0:
+        min_scale = 1e-8
     return ControlSpec(
         name="scale",
         kind="slider",
         label="scale",
         default=scale,
-        min=_EMPIRICAL_ROC_SCALE_MIN,
-        max=max(_EMPIRICAL_ROC_SCALE_MAX, scale),
+        min=min_scale,
+        max=max(_EMPIRICAL_ROC_SCALE_MAX, scale, min_scale),
         step=0.05,
         continuous=True,
         slider_scale="log",

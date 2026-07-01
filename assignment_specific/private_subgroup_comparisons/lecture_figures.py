@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
+from libdpy.assignment_specific.private_estimation.lecture_figures import (
+    make_accuracy_leaderboard_figure,
+)
 from libdpy.assignment_specific.private_estimation.utils import (
     DEFAULT_SEED,
 )
@@ -48,14 +51,24 @@ _DPI = 100
 DEFAULT_BETA = 0.35
 ORACLE_EPS = 1.0
 PTR_DELTA = 0.05
+_SUBGROUP_LEADERBOARD_KWARGS = {
+    "estimate_target": "subgroup_difference",
+    "error_metric": "value",
+    "x_label": "signed error in normalized average salary gap",
+    "std_fmt": ".4f",
+    "x_tick_fmt": ".3f",
+    "round_decimals": 3,
+}
 
 
 @dataclass(frozen=True)
 class SubgroupSamplingArtifact:
     """Sampling distribution for the non-private subgroup statistic."""
 
-    population_delta: float
-    sample_deltas: np.ndarray
+    comparison_label: str
+    population_size: int
+    population_gap: float
+    sample_gaps: np.ndarray
     sample_size: int
     n_samples: int
 
@@ -118,25 +131,29 @@ def build_subgroup_sampling_artifact(
     *,
     sample_size: int,
     n_samples: int,
+    comparison_label: str = "subgroup comparison",
     seed: int = DEFAULT_SEED,
 ) -> SubgroupSamplingArtifact:
-    """Sample fixed-size datasets and compute the subgroup gap on each sample."""
+    """Resample fixed-size datasets and compute the subgroup gap on each draw."""
 
     population_values = np.asarray(population_values, dtype=float)
     population_groups = np.asarray(population_groups)
-    if sample_size > len(population_values):
+    population_size = len(population_values)
+    if sample_size > population_size:
         raise ValueError("sample_size cannot exceed the population size")
-    population_delta = subgroup_difference(population_values, population_groups)
+    population_gap = subgroup_difference(population_values, population_groups)
     rng = np.random.default_rng(seed)
-    sample_deltas = []
+    sample_gaps = []
     for _ in range(n_samples):
-        idx = rng.choice(len(population_values), size=sample_size, replace=False)
-        sample_deltas.append(
+        idx = rng.integers(0, population_size, size=sample_size)
+        sample_gaps.append(
             subgroup_difference(population_values[idx], population_groups[idx])
         )
     return SubgroupSamplingArtifact(
-        population_delta=population_delta,
-        sample_deltas=np.asarray(sample_deltas, dtype=float),
+        comparison_label=comparison_label,
+        population_size=population_size,
+        population_gap=population_gap,
+        sample_gaps=np.asarray(sample_gaps, dtype=float),
         sample_size=sample_size,
         n_samples=n_samples,
     )
@@ -198,9 +215,7 @@ def build_count_sum_artifact(
     groups = np.asarray(groups)
     target = subgroup_difference(x, groups)
     splits = {
-        "equal": (0.25, 0.25, 0.25, 0.25),
-        "counts-heavy": (0.40, 0.40, 0.10, 0.10),
-        "sums-heavy": (0.10, 0.10, 0.40, 0.40),
+        "half counts / half sums": (0.25, 0.25, 0.25, 0.25),
     }
     rmse_by_split: dict[str, float] = {}
     budget_rows: list[dict[str, float]] = []
@@ -479,80 +494,54 @@ def evaluate_subgroup_accuracy(
 def make_subgroup_sampling_distribution_figure(
     artifact: SubgroupSamplingArtifact,
     *,
-    x_label: str = "mean-scaled subgroup gap Delta",
+    title: str,
+    x_label: str = "normalized average salary gap",
+    xlim: tuple[float, float] | None = None,
 ) -> Figure:
-    """Plot sample-to-sample variation around the population subgroup gap."""
+    """Plot sample-to-sample variation around the population normalized salary gap."""
 
-    fig, ax = plt.subplots(figsize=(7, 4), dpi=_DPI)
-    edges = adaptive_histogram_bin_edges(artifact.sample_deltas)
+    fig, ax = plt.subplots(figsize=(7.5, 4.2), dpi=_DPI)
+    edges = adaptive_histogram_bin_edges(artifact.sample_gaps)
     add_histogram_density_line(
         ax,
-        artifact.sample_deltas,
+        artifact.sample_gaps,
         edges,
-        label=f"samples, n={artifact.sample_size}",
+        label=(
+            f"{artifact.n_samples} resamples "
+            f"(draw n={artifact.sample_size:,} from N={artifact.population_size:,})"
+        ),
         color=PROVENANCE_PALETTE["typical"],
         linewidth=2.0,
     )
     ax.axvline(
-        artifact.population_delta,
+        artifact.population_gap,
         color=PROVENANCE_PALETTE["engineered"],
         linestyle=MPL_BOUND,
         linewidth=2,
-        label=f"population Delta={artifact.population_delta:.3f}",
+        label=f"population gap = {artifact.population_gap:.3f}",
     )
     ax.set_xlabel(x_label)
     ax.set_ylabel("density")
-    ax.set_title("Sampling distribution: Delta")
-    ax.legend(fontsize=8)
+    ax.set_title(title)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     return fig
 
 
-def make_noisy_count_sum_release_figure(artifact: CountSumArtifact) -> Figure:
-    """Show how explicit epsilon splits affect count/sum release accuracy."""
+def make_subgroup_accuracy_leaderboard_figure(
+    leaderboard: pd.DataFrame,
+    *,
+    title: str,
+) -> Figure:
+    """Lecture 5-style signed-error leaderboard for one subgroup mechanism."""
 
-    fig, (budget_ax, rmse_ax) = plt.subplots(
-        1,
-        2,
-        figsize=(9.5, 3.8),
-        dpi=_DPI,
-        gridspec_kw={"width_ratios": [1.2, 1.0]},
+    return make_accuracy_leaderboard_figure(
+        leaderboard,
+        title=title,
+        **_SUBGROUP_LEADERBOARD_KWARGS,
     )
-    labels = [row["split"] for row in artifact.budget_rows]
-    query_names = ["eps_n_A", "eps_n_B", "eps_S_A", "eps_S_B"]
-    query_labels = ["n_A", "n_B", "S_A", "S_B"]
-    colors = [
-        PROVENANCE_PALETTE["typical"],
-        PROVENANCE_PALETTE["engineered"],
-        PROVENANCE_PALETTE["extreme_real"],
-        "#6f6f6f",
-    ]
-    bottom = np.zeros(len(labels))
-    x_pos = np.arange(len(labels))
-    for query_name, query_label, color in zip(query_names, query_labels, colors):
-        values = np.array([row[query_name] for row in artifact.budget_rows], dtype=float)
-        budget_ax.bar(x_pos, values, bottom=bottom, color=color, label=query_label)
-        bottom += values
-    budget_ax.set_xticks(x_pos)
-    budget_ax.set_xticklabels(labels, rotation=20, ha="right")
-    budget_ax.set_ylabel("epsilon")
-    budget_ax.set_title("Budget split")
-    budget_ax.legend(fontsize=8, ncols=2)
-
-    rmse_values = [artifact.rmse_by_split[label] for label in labels]
-    rmse_ax.bar(
-        x_pos,
-        rmse_values,
-        color=PROVENANCE_PALETTE["typical"],
-        alpha=0.85,
-    )
-    rmse_ax.set_xticks(x_pos)
-    rmse_ax.set_xticklabels(labels, rotation=20, ha="right")
-    rmse_ax.set_ylabel("RMSE of Delta")
-    rmse_ax.set_title("Accuracy")
-    fig.suptitle("Noisy counts and sums", fontsize=12)
-    fig.tight_layout()
-    return fig
 
 
 def make_support_comparison_figure(
