@@ -112,6 +112,46 @@ def validate_nonnegative_bounded_values(
     return values
 
 
+def ptr_support_distance(min_count: int, m: int) -> int:
+    """Distance from datasets with minimum support below threshold ``m``."""
+
+    return max(int(min_count) - int(m) + 1, 0)
+
+
+def ptr_test_buffer(eps_test: float, delta: float) -> float:
+    """Public acceptance buffer for the noisy support-distance test."""
+
+    if eps_test <= 0:
+        raise ValueError("eps_test must be positive")
+    if not 0 < delta < 1:
+        raise ValueError("delta must be in (0, 1)")
+    return float(np.log(2.0 / delta) / eps_test)
+
+
+def ptr_abstention_probability(
+    min_count: int,
+    m: int,
+    eps_test: float,
+    delta: float,
+) -> float:
+    """Analytic probability that the PTR support test abstains."""
+
+    from scipy.stats import norm
+
+    distance = ptr_support_distance(min_count, m)
+    test_std = gaussian_noise_std(1.0, eps_test, delta)
+    buffer = ptr_test_buffer(eps_test, delta)
+    if test_std <= 0:
+        return float(distance <= buffer)
+    return float(norm.cdf((buffer - distance) / test_std))
+
+
+def ptr_false_accept_probability(eps_test: float, delta: float) -> float:
+    """Analytic P(release | true distance = 0), i.e. on the bad-set boundary."""
+
+    return 1.0 - ptr_abstention_probability(0, 1, eps_test, delta)
+
+
 def oracle_local_sensitivity_output_law(
     x: np.ndarray,
     groups: np.ndarray,

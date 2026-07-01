@@ -8,4 +8,4 @@ Subpackages:
 - ml: machine-learning related helpers (skeleton)
 """
 
-__version__ = "0.2.15"
+__version__ = "0.2.16"

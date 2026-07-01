@@ -26,7 +26,11 @@ from libdpy.visualization.plot_styles import MPL_BOUND, MPL_PRIMARY, MPL_REFEREN
 from libdpy.assignment_specific.private_subgroup_comparisons.mechanisms import (
     conceptual_smooth_sensitivity_release,
     noisy_count_sum_release,
+    ptr_abstention_probability,
+    ptr_false_accept_probability,
+    ptr_support_distance,
     ptr_support_release,
+    ptr_test_buffer,
     subgroup_counts,
     subgroup_difference,
 )
@@ -123,6 +127,20 @@ class AboveThresholdSupportArtifact:
     halt_index: int
     noisy_prefix: list[bool]
     epsilon: float
+
+
+@dataclass(frozen=True)
+class PtrFailureArtifact:
+    """Analytic PTR abstention/failure probabilities vs true minimum support."""
+
+    support_values: np.ndarray
+    abstention_probability: np.ndarray
+    distance_values: np.ndarray
+    ptr_threshold: int
+    eps_test: float
+    delta: float
+    buffer: float
+    false_accept_at_zero: float
 
 
 def build_subgroup_sampling_artifact(
@@ -428,6 +446,43 @@ def build_above_threshold_support_artifact(seed: int = DEFAULT_SEED) -> AboveThr
     )
 
 
+def build_ptr_failure_artifact(
+    *,
+    support_values: np.ndarray | None = None,
+    ptr_threshold: int = DEFAULT_SUPPORT_THRESHOLD,
+    eps_test: float = 0.4,
+    delta: float = PTR_DELTA,
+) -> PtrFailureArtifact:
+    """Analytic PTR abstention curve as true minimum support varies."""
+
+    if ptr_threshold < 2:
+        raise ValueError("ptr_threshold must be at least 2")
+    if support_values is None:
+        support_values = np.arange(1, 121, dtype=int)
+    support_values = np.asarray(support_values, dtype=int)
+    abstention = np.array(
+        [
+            ptr_abstention_probability(int(n), ptr_threshold, eps_test, delta)
+            for n in support_values
+        ],
+        dtype=float,
+    )
+    distances = np.array(
+        [ptr_support_distance(int(n), ptr_threshold) for n in support_values],
+        dtype=int,
+    )
+    return PtrFailureArtifact(
+        support_values=support_values,
+        abstention_probability=abstention,
+        distance_values=distances,
+        ptr_threshold=ptr_threshold,
+        eps_test=eps_test,
+        delta=delta,
+        buffer=ptr_test_buffer(eps_test, delta),
+        false_accept_at_zero=ptr_false_accept_probability(eps_test, delta),
+    )
+
+
 def evaluate_subgroup_accuracy(
     population_df: pd.DataFrame,
     mechanism: Callable[..., dict[str, Any]],
@@ -542,6 +597,70 @@ def make_subgroup_accuracy_leaderboard_figure(
         title=title,
         **_SUBGROUP_LEADERBOARD_KWARGS,
     )
+
+
+def make_ptr_failure_probability_figure(
+    artifact: PtrFailureArtifact,
+    *,
+    title: str,
+    marker_min_count: int | None = None,
+    marker_label: str | None = None,
+) -> Figure:
+    """Plot analytic PTR test-failure (abstention) probability vs true support."""
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=_DPI)
+    ax.plot(
+        artifact.support_values,
+        artifact.abstention_probability,
+        color=PROVENANCE_PALETTE["engineered"],
+        linestyle=MPL_PRIMARY,
+        linewidth=2.0,
+        label="P(test fails → abstain)",
+    )
+    ax.axhline(
+        artifact.delta,
+        color="#555555",
+        linestyle=MPL_REFERENCE,
+        linewidth=1.5,
+        label=f"chosen failure probability δ={artifact.delta:g}",
+    )
+    ax.axhline(
+        artifact.false_accept_at_zero,
+        color=PROVENANCE_PALETTE["extreme_real"],
+        linestyle=MPL_SECONDARY,
+        linewidth=1.2,
+        label=f"P(release | distance=0)={artifact.false_accept_at_zero:.3f}",
+    )
+    ax.axvline(
+        artifact.ptr_threshold,
+        color=PROVENANCE_PALETTE["typical"],
+        linestyle=MPL_BOUND,
+        linewidth=1.5,
+        label=f"PTR threshold m={artifact.ptr_threshold}",
+    )
+    if marker_min_count is not None:
+        marker_prob = float(
+            np.interp(
+                marker_min_count,
+                artifact.support_values.astype(float),
+                artifact.abstention_probability,
+            )
+        )
+        ax.scatter(
+            [marker_min_count],
+            [marker_prob],
+            color=PROVENANCE_PALETTE["typical"],
+            s=36,
+            zorder=5,
+            label=marker_label or f"this sample min n={marker_min_count}",
+        )
+    ax.set_xlabel("true minimum group support min(n_A, n_B)")
+    ax.set_ylabel("PTR test failure probability")
+    ax.set_title(title)
+    ax.set_ylim(0.0, 1.0)
+    ax.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    return fig
 
 
 def make_support_comparison_figure(
