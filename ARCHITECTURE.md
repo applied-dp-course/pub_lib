@@ -128,7 +128,12 @@ only in the assignment notebooks).
 | `ml_and_overfitting/` | week 11 lecture |
 | `privacy_auditing/` | week 4 class helpers (`legacy_algorithm`, histogram plots, and compatibility re-exports for threshold helpers) |
 | `reconstruction/` | week 2 class (`mysterious_predictor`/`reconstructor` are implemented, intentionally opaque); `reconstruction_lecture_visualization.py` (matplotlib: query matrix, 2D slab widget, candidate elimination) and `reconstruction_3d_visualization.py` (Plotly: 3D slab explorer, OLS out-of-cube) for the reconstruction lecture |
+| `private_subgroup_comparisons/` | lecture 6 scaffolding (subgroup denominators, local sensitivity, private control flow) |
 | `k_anon/` | week 1 class |
+
+When adding a new subpackage here, update **`libdpy/pyproject.toml`** `[tool.setuptools] packages`
+in the **same release** as the new directory — see `DEVELOPMENT/PUB_LIB_DELIVERY.md` → *Packaging
+hygiene*.
 
 ## `resources/`
 
