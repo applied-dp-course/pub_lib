@@ -13,17 +13,34 @@ from libdpy.assignment_specific.private_estimation.utils import (
 from libdpy.assignment_specific.private_subgroup_comparisons.mechanisms import (
     GROUP_A,
     GROUP_B,
-    normalize_clipped_salary,
     subgroup_counts,
 )
 
 PUBLIC_CLIP_LOWER = 0.0
-PUBLIC_CLIP_UPPER = 150_000.0
+PUBLIC_CLIP_UPPER = 141_450.0
+PUBLIC_REFERENCE_MEAN = 33_423.95303888846
+PUBLIC_VALUE_UPPER = PUBLIC_CLIP_UPPER / PUBLIC_REFERENCE_MEAN
 DEFAULT_TAU = 5.0
 DEFAULT_SUPPORT_THRESHOLD = 30
 DEFAULT_EPS_TOTAL = 1.0
 DEFAULT_EPS_COUNT = 0.25
 DEFAULT_EPS_SUM = 0.25
+
+
+def scale_clipped_salary_by_reference_mean(
+    y: np.ndarray,
+    L: float,
+    U: float,
+    reference_mean: float,
+) -> np.ndarray:
+    """Clip salary dollars and scale them by a public reference mean."""
+
+    if U <= L:
+        raise ValueError("clip upper bound must exceed lower bound")
+    if reference_mean <= 0:
+        raise ValueError("reference mean must be positive")
+    clipped = np.clip(np.asarray(y, dtype=float), L, U)
+    return clipped / reference_mean
 
 
 def age_group_labels(age: np.ndarray) -> np.ndarray:
@@ -33,26 +50,55 @@ def age_group_labels(age: np.ndarray) -> np.ndarray:
     return np.where(age < 50, GROUP_A, GROUP_B)
 
 
+def sex_group_labels(sex: np.ndarray) -> np.ndarray:
+    """Public grouping: the dataset's two sex-code categories."""
+
+    sex = np.asarray(sex, dtype=int)
+    return np.where(sex == 0, GROUP_A, GROUP_B)
+
+
+def latino_group_labels(latino: np.ndarray) -> np.ndarray:
+    """Public grouping: Latino workers versus everyone else (~5% in Fulton)."""
+
+    latino = np.asarray(latino, dtype=int)
+    return np.where(latino == 1, GROUP_B, GROUP_A)
+
+
 def prepare_fulton_subgroup_frame(
     *,
     n_rows: int = 1000,
     seed: int = DEFAULT_SEED,
 ) -> pd.DataFrame:
-    """Return a Fulton subset with normalized salary and public age groups."""
+    """Return a Fulton subset with mean-scaled salary and public subgroup labels."""
 
-    df = load_fulton().head(n_rows).copy()
+    source = load_fulton()
+    if n_rows < len(source):
+        df = source.sample(n=n_rows, random_state=seed).sort_index().copy()
+    else:
+        df = source.head(n_rows).copy()
     income = extract_income(df)
-    df["x"] = normalize_clipped_salary(income, PUBLIC_CLIP_LOWER, PUBLIC_CLIP_UPPER)
-    df["group"] = age_group_labels(df["age"].to_numpy(dtype=float))
+    df["x"] = scale_clipped_salary_by_reference_mean(
+        income,
+        PUBLIC_CLIP_LOWER,
+        PUBLIC_CLIP_UPPER,
+        PUBLIC_REFERENCE_MEAN,
+    )
+    df["sex_group"] = sex_group_labels(df["sex"].to_numpy(dtype=int))
+    df["latino_group"] = latino_group_labels(df["latino"].to_numpy(dtype=int))
+    df["age_group"] = age_group_labels(df["age"].to_numpy(dtype=float))
+    df["group"] = df["sex_group"]
     df["income"] = income
-    _ = seed
     return df
 
 
-def frame_to_arrays(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    """Extract normalized values and group labels from a prepared frame."""
+def frame_to_arrays(
+    frame: pd.DataFrame,
+    *,
+    group_column: str = "group",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract mean-scaled values and group labels from a prepared frame."""
 
-    return frame["x"].to_numpy(dtype=float), frame["group"].to_numpy()
+    return frame["x"].to_numpy(dtype=float), frame[group_column].to_numpy()
 
 
 def build_balanced_subgroup_sample(
@@ -60,7 +106,7 @@ def build_balanced_subgroup_sample(
     *,
     seed: int = DEFAULT_SEED,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Synthetic balanced sample with moderate group means on the normalized scale."""
+    """Synthetic balanced sample with moderate group means on a bounded scale."""
 
     rng = np.random.default_rng(seed)
     n = n_per_group * 2
